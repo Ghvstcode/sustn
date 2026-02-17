@@ -1,5 +1,8 @@
+mod auth;
 mod command;
 pub mod migrations;
+mod preflight;
+mod repository;
 
 const DB_URL: &str = "sqlite:sustn.db";
 
@@ -21,7 +24,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
-        .invoke_handler(tauri::generate_handler![command::greet])
+        .plugin(tauri_plugin_deep_link::init())
+        .invoke_handler(tauri::generate_handler![
+            command::greet,
+            auth::generate_auth_id,
+            preflight::check_git_installed,
+            preflight::check_claude_installed,
+            preflight::check_claude_authenticated,
+            preflight::check_gh_installed,
+            repository::validate_git_repo,
+            repository::generate_repo_id,
+            repository::clone_repository,
+            repository::get_default_clone_dir,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

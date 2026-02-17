@@ -35,6 +35,11 @@
         },
         "sql": {
             "preload": ["sqlite:sustn.db"]
+        },
+        "deep-link": {
+            "desktop": {
+                "schemes": ["sustn-qa"]
+            }
         }
     }
 }

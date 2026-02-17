@@ -11,6 +11,7 @@ export default tseslint.config(
             "src-tauri/target/**/*",
             "dist/**/*",
             "web/**/*",
+            "server/**/*",
             "postcss.config.js",
             "tailwind.config.cjs",
         ],

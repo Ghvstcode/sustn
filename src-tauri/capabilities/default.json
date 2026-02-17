@@ -20,12 +20,12 @@
         "sql:allow-execute",
         "sql:allow-load",
         "sql:allow-select",
-        {
-            "identifier": "opener:allow-open-url"
-        },
+        "opener:allow-open-url",
+        "opener:allow-default-urls",
         {
             "identifier": "opener:allow-open-path",
             "allow": [{ "path": "**/*" }]
-        }
+        },
+        "deep-link:default"
     ]
 }

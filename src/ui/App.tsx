@@ -1,10 +1,18 @@
-import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+import {
+    BrowserRouter as Router,
+    Route,
+    Routes,
+    Navigate,
+} from "react-router-dom";
 import "./App.css";
 import { ThemeProvider } from "@ui/providers/ThemeProvider";
 import { AppProvider } from "@ui/providers/AppProvider";
 import { AppShell } from "@ui/components/layout/AppShell";
+import { OnboardingLayout } from "@ui/components/layout/OnboardingLayout";
+import { OnboardingFlow } from "@ui/components/onboarding/OnboardingFlow";
 import { Toaster } from "sonner";
 import { useTheme } from "@ui/hooks/useTheme";
+import { useOnboardingStatus } from "@core/api/useOnboarding";
 import {
     QueryClient,
     QueryClientProvider,
@@ -30,6 +38,24 @@ const queryClient = new QueryClient({
     },
 });
 
+function AuthGuard({ children }: { children: React.ReactNode }) {
+    const { data: isComplete, isLoading } = useOnboardingStatus();
+
+    if (isLoading) {
+        return (
+            <div className="flex h-screen w-screen items-center justify-center bg-background">
+                <p className="text-muted-foreground">Loading...</p>
+            </div>
+        );
+    }
+
+    if (!isComplete) {
+        return <Navigate to="/onboarding" replace />;
+    }
+
+    return <>{children}</>;
+}
+
 function AppContent() {
     const { mode } = useTheme();
 
@@ -42,20 +68,30 @@ function AppContent() {
 
     return (
         <div className="select-none bg-background">
-            <AppShell>
-                <Routes>
-                    <Route
-                        path="/"
-                        element={
-                            <div className="flex items-center justify-center h-full">
-                                <h1 className="text-2xl text-muted-foreground">
-                                    Welcome to SUSTN
-                                </h1>
-                            </div>
-                        }
-                    />
-                </Routes>
-            </AppShell>
+            <Routes>
+                <Route
+                    path="/onboarding"
+                    element={
+                        <OnboardingLayout>
+                            <OnboardingFlow />
+                        </OnboardingLayout>
+                    }
+                />
+                <Route
+                    path="/"
+                    element={
+                        <AuthGuard>
+                            <AppShell>
+                                <div className="flex items-center justify-center h-full">
+                                    <h1 className="text-2xl text-muted-foreground">
+                                        Welcome to SUSTN
+                                    </h1>
+                                </div>
+                            </AppShell>
+                        </AuthGuard>
+                    }
+                />
+            </Routes>
             <Toaster
                 theme={resolvedTheme}
                 position="bottom-right"
