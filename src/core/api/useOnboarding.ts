@@ -14,9 +14,7 @@ export function useCompleteOnboarding() {
     return useMutation({
         mutationFn: setOnboardingComplete,
         onSuccess: () => {
-            void queryClient.invalidateQueries({
-                queryKey: ["onboarding-status"],
-            });
+            queryClient.setQueryData(["onboarding-status"], true);
         },
     });
 }

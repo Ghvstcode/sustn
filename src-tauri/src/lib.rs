@@ -34,6 +34,7 @@ pub fn run() {
             preflight::check_gh_installed,
             repository::validate_git_repo,
             repository::generate_repo_id,
+            repository::generate_task_id,
             repository::clone_repository,
             repository::get_default_clone_dir,
         ])

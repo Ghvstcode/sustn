@@ -81,13 +81,7 @@ function AppContent() {
                     path="/"
                     element={
                         <AuthGuard>
-                            <AppShell>
-                                <div className="flex items-center justify-center h-full">
-                                    <h1 className="text-2xl text-muted-foreground">
-                                        Welcome to SUSTN
-                                    </h1>
-                                </div>
-                            </AppShell>
+                            <AppShell />
                         </AuthGuard>
                     }
                 />

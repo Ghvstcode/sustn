@@ -106,6 +106,11 @@ pub async fn clone_repository(url: String, destination: String) -> CloneResult {
 }
 
 #[tauri::command]
+pub fn generate_task_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+#[tauri::command]
 pub fn get_default_clone_dir() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let default_dir = Path::new(&home).join("sustn").join("repos");

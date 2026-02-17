@@ -1,8 +1,16 @@
 import { create } from "zustand";
 
-// Will hold client-side state as features are built
-// Examples: selectedRepoId, isSidebarCollapsed, activeView
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-interface AppStore {}
+interface AppStore {
+    selectedRepositoryId: string | undefined;
+    selectedTaskId: string | undefined;
+    setSelectedRepository: (id: string | undefined) => void;
+    setSelectedTask: (id: string | undefined) => void;
+}
 
-export const useAppStore = create<AppStore>()(() => ({}));
+export const useAppStore = create<AppStore>()((set) => ({
+    selectedRepositoryId: undefined,
+    selectedTaskId: undefined,
+    setSelectedRepository: (id) =>
+        set({ selectedRepositoryId: id, selectedTaskId: undefined }),
+    setSelectedTask: (id) => set({ selectedTaskId: id }),
+}));

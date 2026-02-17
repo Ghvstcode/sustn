@@ -40,5 +40,28 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "create tasks table",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    repository_id TEXT NOT NULL REFERENCES repositories(id),
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    category TEXT NOT NULL DEFAULT 'general',
+                    state TEXT NOT NULL DEFAULT 'pending',
+                    sort_order REAL NOT NULL DEFAULT 0,
+                    notes TEXT,
+                    pr_url TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX idx_tasks_repository ON tasks(repository_id);
+                CREATE INDEX idx_tasks_state ON tasks(repository_id, state);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
