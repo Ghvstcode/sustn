@@ -11,10 +11,13 @@ import {
 } from "@core/db/tasks";
 import type { Task, TaskCategory, TaskState } from "@core/types/task";
 
-export function useTasks(repositoryId: string | undefined) {
+export function useTasks(
+    repositoryId: string | undefined,
+    baseBranch?: string,
+) {
     return useQuery({
-        queryKey: ["tasks", repositoryId],
-        queryFn: () => listTasks(repositoryId!),
+        queryKey: ["tasks", repositoryId, baseBranch],
+        queryFn: () => listTasks(repositoryId!, baseBranch),
         enabled: !!repositoryId,
     });
 }
@@ -37,6 +40,7 @@ export function useCreateTask() {
             description?: string;
             category: TaskCategory;
             sortOrder: number;
+            baseBranch?: string;
         }) => dbCreateTask(task),
         onSuccess: (task) => {
             void queryClient.invalidateQueries({

@@ -25,6 +25,7 @@ const stateLabels: Record<TaskState, string> = {
     review: "Review",
     done: "Done",
     dismissed: "Dismissed",
+    failed: "Failed",
 };
 
 export function TaskDetailHeader({

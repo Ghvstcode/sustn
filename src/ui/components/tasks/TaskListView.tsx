@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import {
     DndContext,
     closestCenter,
@@ -20,27 +20,60 @@ import {
     useDeleteTask,
 } from "@core/api/useTasks";
 import { useRepositories } from "@core/api/useRepositories";
+import { useScanNow } from "@core/api/useEngine";
 import { useAppStore } from "@core/store/app-store";
 import type { TaskCategory } from "@core/types/task";
 import { TaskListHeader } from "./TaskListHeader";
 import { TaskRow } from "./TaskRow";
 import { AddTaskDialog } from "./AddTaskDialog";
+import { DiscoveryBanner } from "@ui/components/main/DiscoveryBanner";
 
 interface TaskListViewProps {
     repositoryId: string;
 }
 
 export function TaskListView({ repositoryId }: TaskListViewProps) {
-    const { data: tasks } = useTasks(repositoryId);
     const { data: repositories } = useRepositories();
+    const repo = repositories?.find((r) => r.id === repositoryId);
+    const defaultBranch = repo?.defaultBranch ?? "main";
+
+    const { data: tasks } = useTasks(repositoryId, defaultBranch);
     const setSelectedTask = useAppStore((s) => s.setSelectedTask);
     const createTask = useCreateTask();
     const reorderTask = useReorderTask();
     const deleteTask = useDeleteTask();
+    const scanNow = useScanNow();
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
 
-    const repo = repositories?.find((r) => r.id === repositoryId);
+    // Track new tasks found during scan
+    const [scanTasksFound, setScanTasksFound] = useState(0);
+    const taskCountBeforeScan = useRef(0);
+
+    // When scan starts, snapshot current task count
+    useEffect(() => {
+        if (scanNow.isPending) {
+            taskCountBeforeScan.current = tasks?.length ?? 0;
+        }
+    }, [scanNow.isPending, tasks?.length]);
+
+    // Update tasks found count during scan
+    useEffect(() => {
+        if (scanNow.isPending && tasks) {
+            const newCount = Math.max(
+                0,
+                tasks.length - taskCountBeforeScan.current,
+            );
+            setScanTasksFound(newCount);
+        }
+    }, [scanNow.isPending, tasks]);
+
+    // Reset count when scan finishes
+    useEffect(() => {
+        if (!scanNow.isPending && scanTasksFound > 0) {
+            // Keep count for the "complete" banner, it auto-dismisses
+        }
+    }, [scanNow.isPending, scanTasksFound]);
 
     const activeTasks = useMemo(
         () =>
@@ -118,6 +151,7 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
                 description: task.description,
                 category: task.category,
                 sortOrder: maxSortOrder + 1,
+                baseBranch: defaultBranch,
             },
             {
                 onSuccess: () => setIsAddDialogOpen(false),
@@ -133,7 +167,11 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
         const newSort = beforePrev
             ? (beforePrev.sortOrder + prev.sortOrder) / 2
             : prev.sortOrder - 1;
-        reorderTask.mutate({ id: taskId, repositoryId, newSortOrder: newSort });
+        reorderTask.mutate({
+            id: taskId,
+            repositoryId,
+            newSortOrder: newSort,
+        });
     }
 
     function handleMoveDown(taskId: string) {
@@ -145,11 +183,26 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
         const newSort = afterNext
             ? (next.sortOrder + afterNext.sortOrder) / 2
             : next.sortOrder + 1;
-        reorderTask.mutate({ id: taskId, repositoryId, newSortOrder: newSort });
+        reorderTask.mutate({
+            id: taskId,
+            repositoryId,
+            newSortOrder: newSort,
+        });
     }
 
     function handleDeleteTask(taskId: string) {
         deleteTask.mutate({ id: taskId, repositoryId });
+    }
+
+    function handleScan() {
+        if (!repo) return;
+        setScanTasksFound(0);
+        taskCountBeforeScan.current = tasks?.length ?? 0;
+        scanNow.mutate({
+            repoPath: repo.path,
+            repositoryId,
+            baseBranch: defaultBranch,
+        });
     }
 
     return (
@@ -159,7 +212,16 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
                 repositoryId={repositoryId}
                 repositoryPath={repo?.path ?? ""}
                 lastPulledAt={repo?.lastPulledAt}
+                defaultBranch={defaultBranch}
+                isScanning={scanNow.isPending}
                 onAddTask={() => setIsAddDialogOpen(true)}
+                onScan={handleScan}
+            />
+
+            {/* Discovery banner */}
+            <DiscoveryBanner
+                isScanning={scanNow.isPending}
+                tasksFound={scanTasksFound}
             />
 
             {activeTasks.length === 0 && doneTasks.length === 0 ? (

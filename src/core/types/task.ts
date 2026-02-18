@@ -10,7 +10,11 @@ export type TaskState =
     | "in_progress"
     | "review"
     | "done"
-    | "dismissed";
+    | "dismissed"
+    | "failed";
+
+export type TaskSource = "manual" | "scan";
+export type EstimatedEffort = "low" | "medium" | "high";
 
 export interface Task {
     id: string;
@@ -24,6 +28,17 @@ export interface Task {
     prUrl: string | undefined;
     linesAdded: number | undefined;
     linesRemoved: number | undefined;
+    source: TaskSource;
+    estimatedEffort: EstimatedEffort | undefined;
+    filesInvolved: string[] | undefined;
+    baseBranch: string | undefined;
+    branchName: string | undefined;
+    commitSha: string | undefined;
+    tokensUsed: number;
+    retryCount: number;
+    lastError: string | undefined;
+    startedAt: string | undefined;
+    completedAt: string | undefined;
     createdAt: string;
     updatedAt: string;
 }

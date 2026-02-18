@@ -1,12 +1,15 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "@ui/components/sidebar/Sidebar";
 import { MainContent } from "@ui/components/main/MainContent";
+import { useStartupRecovery } from "@core/api/useEngine";
 
 const MIN_WIDTH = 180;
 const MAX_WIDTH = 400;
 const DEFAULT_WIDTH = 224; // w-56
 
 export function AppShell() {
+    useStartupRecovery();
+
     const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);
     const isDragging = useRef(false);
 

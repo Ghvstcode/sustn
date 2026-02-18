@@ -8,6 +8,7 @@ interface RepositoryRow {
     name: string;
     created_at: string;
     last_pulled_at: string | null;
+    default_branch: string | null;
 }
 
 export interface Repository {
@@ -16,6 +17,7 @@ export interface Repository {
     name: string;
     createdAt: string;
     lastPulledAt: string | undefined;
+    defaultBranch: string;
 }
 
 async function getDb() {
@@ -29,6 +31,7 @@ function rowToRepository(row: RepositoryRow): Repository {
         name: row.name,
         createdAt: row.created_at,
         lastPulledAt: row.last_pulled_at ?? undefined,
+        defaultBranch: row.default_branch ?? "main",
     };
 }
 
@@ -65,5 +68,16 @@ export async function updateLastPulledAt(id: string): Promise<void> {
     await db.execute(
         "UPDATE repositories SET last_pulled_at = CURRENT_TIMESTAMP WHERE id = $1",
         [id],
+    );
+}
+
+export async function updateDefaultBranch(
+    id: string,
+    branch: string,
+): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+        "UPDATE repositories SET default_branch = $1 WHERE id = $2",
+        [branch, id],
     );
 }

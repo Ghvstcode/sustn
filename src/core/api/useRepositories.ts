@@ -4,6 +4,7 @@ import {
     listRepositories,
     addRepository as dbAddRepository,
     updateLastPulledAt,
+    updateDefaultBranch,
 } from "@core/db/repositories";
 
 interface ValidateResult {
@@ -98,6 +99,36 @@ export function useGitPull() {
             await updateLastPulledAt(repositoryId);
             return result;
         },
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: ["repositories"] });
+        },
+    });
+}
+
+export function useGitBranches(repoPath: string | undefined) {
+    return useQuery({
+        queryKey: ["git-branches", repoPath],
+        queryFn: () =>
+            invoke<Array<{ name: string; isCurrent: boolean }>>(
+                "engine_list_branches",
+                { repoPath: repoPath! },
+            ),
+        enabled: !!repoPath,
+        staleTime: 30_000,
+    });
+}
+
+export function useUpdateDefaultBranch() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: ({
+            repositoryId,
+            branch,
+        }: {
+            repositoryId: string;
+            branch: string;
+        }) => updateDefaultBranch(repositoryId, branch),
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: ["repositories"] });
         },
