@@ -6,6 +6,8 @@ import {
     updateTask as dbUpdateTask,
     deleteTask as dbDeleteTask,
     reorderTask as dbReorderTask,
+    addComment as dbAddComment,
+    listTaskEvents,
 } from "@core/db/tasks";
 import type { Task, TaskCategory, TaskState } from "@core/types/task";
 
@@ -67,6 +69,9 @@ export function useUpdateTask() {
             });
             void queryClient.invalidateQueries({
                 queryKey: ["task", task.id],
+            });
+            void queryClient.invalidateQueries({
+                queryKey: ["task-events", task.id],
             });
         },
     });
@@ -130,6 +135,33 @@ export function useReorderTask() {
         onSettled: (_data, _error, variables) => {
             void queryClient.invalidateQueries({
                 queryKey: ["tasks", variables.repositoryId],
+            });
+        },
+    });
+}
+
+export function useTaskEvents(taskId: string | undefined) {
+    return useQuery({
+        queryKey: ["task-events", taskId],
+        queryFn: () => listTaskEvents(taskId!),
+        enabled: !!taskId,
+    });
+}
+
+export function useAddComment() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: ({
+            taskId,
+            comment,
+        }: {
+            taskId: string;
+            comment: string;
+        }) => dbAddComment(taskId, comment),
+        onSuccess: (event) => {
+            void queryClient.invalidateQueries({
+                queryKey: ["task-events", event.taskId],
             });
         },
     });

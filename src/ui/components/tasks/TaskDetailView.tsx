@@ -1,6 +1,5 @@
 import { useTask, useUpdateTask, useDeleteTask } from "@core/api/useTasks";
 import { useAppStore } from "@core/store/app-store";
-import { ScrollArea } from "@ui/components/ui/scroll-area";
 import { Separator } from "@ui/components/ui/separator";
 import type { TaskState } from "@core/types/task";
 import { TaskDetailHeader } from "./TaskDetailHeader";
@@ -8,6 +7,7 @@ import { TaskOverview } from "./TaskOverview";
 import { TaskNotes } from "./TaskNotes";
 import { TaskActions } from "./TaskActions";
 import { TaskReviewPanel } from "./TaskReviewPanel";
+import { TaskHistory } from "./TaskHistory";
 
 interface TaskDetailViewProps {
     taskId: string;
@@ -60,32 +60,41 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                 onDelete={handleDelete}
             />
 
-            <ScrollArea className="flex-1">
-                <div className="space-y-6 px-6 py-5">
-                    <TaskOverview task={task} />
+            <div className="flex-1 overflow-y-auto">
+                <div className="min-h-full flex flex-col justify-center">
+                    <div className="mx-auto w-full max-w-2xl space-y-6 px-6 py-5">
+                        <TaskOverview task={task} />
 
-                    <Separator />
+                        <Separator />
 
-                    <TaskActions
-                        state={task.state}
-                        onUpdateState={handleUpdateState}
-                    />
+                        <TaskActions
+                            state={task.state}
+                            onUpdateState={handleUpdateState}
+                        />
 
-                    {(task.state === "review" || task.prUrl) && (
-                        <>
-                            <Separator />
-                            <TaskReviewPanel
-                                prUrl={task.prUrl}
-                                onSavePrUrl={handleSavePrUrl}
-                            />
-                        </>
-                    )}
+                        {(task.state === "review" || task.prUrl) && (
+                            <>
+                                <Separator />
+                                <TaskReviewPanel
+                                    prUrl={task.prUrl}
+                                    onSavePrUrl={handleSavePrUrl}
+                                />
+                            </>
+                        )}
 
-                    <Separator />
+                        <Separator />
 
-                    <TaskNotes notes={task.notes} onSave={handleSaveNotes} />
+                        <TaskNotes
+                            notes={task.notes}
+                            onSave={handleSaveNotes}
+                        />
+
+                        <Separator />
+
+                        <TaskHistory taskId={taskId} />
+                    </div>
                 </div>
-            </ScrollArea>
+            </div>
         </div>
     );
 }

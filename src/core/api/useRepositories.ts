@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
     listRepositories,
     addRepository as dbAddRepository,
+    updateLastPulledAt,
 } from "@core/db/repositories";
 
 interface ValidateResult {
@@ -67,6 +68,35 @@ export function useCloneRepository() {
             // Extract repo name from the path
             const name = result.path.split("/").pop() ?? "unknown";
             return await dbAddRepository(result.path, name);
+        },
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: ["repositories"] });
+        },
+    });
+}
+
+interface PullResult {
+    success: boolean;
+    error: string | null;
+}
+
+export function useGitPull() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async ({
+            path,
+            repositoryId,
+        }: {
+            path: string;
+            repositoryId: string;
+        }) => {
+            const result = await invoke<PullResult>("git_pull", { path });
+            if (!result.success) {
+                throw new Error(result.error ?? "git pull failed");
+            }
+            await updateLastPulledAt(repositoryId);
+            return result;
         },
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: ["repositories"] });

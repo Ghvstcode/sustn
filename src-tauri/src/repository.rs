@@ -105,6 +105,47 @@ pub async fn clone_repository(url: String, destination: String) -> CloneResult {
     })
 }
 
+#[derive(Debug, Serialize)]
+pub struct PullResult {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn git_pull(path: String) -> PullResult {
+    tauri::async_runtime::spawn_blocking(move || {
+        match std::process::Command::new("git")
+            .args(["pull"])
+            .current_dir(&path)
+            .output()
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    PullResult {
+                        success: true,
+                        error: None,
+                    }
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    PullResult {
+                        success: false,
+                        error: Some(format!("git pull failed: {}", stderr.trim())),
+                    }
+                }
+            }
+            Err(e) => PullResult {
+                success: false,
+                error: Some(format!("Failed to execute git: {}", e)),
+            },
+        }
+    })
+    .await
+    .unwrap_or_else(|e| PullResult {
+        success: false,
+        error: Some(format!("Pull task panicked: {}", e)),
+    })
+}
+
 #[tauri::command]
 pub fn generate_task_id() -> String {
     uuid::Uuid::new_v4().to_string()

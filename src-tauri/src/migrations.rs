@@ -63,5 +63,35 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 4,
+            description: "add last_pulled_at to repositories",
+            sql: r#"
+                ALTER TABLE repositories ADD COLUMN last_pulled_at DATETIME;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 5,
+            description: "create task_events table and add diff columns to tasks",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS task_events (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    field TEXT,
+                    old_value TEXT,
+                    new_value TEXT,
+                    comment TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX idx_task_events_task ON task_events(task_id);
+
+                ALTER TABLE tasks ADD COLUMN lines_added INTEGER;
+                ALTER TABLE tasks ADD COLUMN lines_removed INTEGER;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

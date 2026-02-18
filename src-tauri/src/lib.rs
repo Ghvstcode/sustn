@@ -36,6 +36,7 @@ pub fn run() {
             repository::generate_repo_id,
             repository::generate_task_id,
             repository::clone_repository,
+            repository::git_pull,
             repository::get_default_clone_dir,
         ])
         .run(tauri::generate_context!())

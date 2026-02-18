@@ -7,6 +7,7 @@ interface RepositoryRow {
     path: string;
     name: string;
     created_at: string;
+    last_pulled_at: string | null;
 }
 
 export interface Repository {
@@ -14,6 +15,7 @@ export interface Repository {
     path: string;
     name: string;
     createdAt: string;
+    lastPulledAt: string | undefined;
 }
 
 async function getDb() {
@@ -26,6 +28,7 @@ function rowToRepository(row: RepositoryRow): Repository {
         path: row.path,
         name: row.name,
         createdAt: row.created_at,
+        lastPulledAt: row.last_pulled_at ?? undefined,
     };
 }
 
@@ -55,4 +58,12 @@ export async function addRepository(
     );
 
     return rowToRepository(rows[0]);
+}
+
+export async function updateLastPulledAt(id: string): Promise<void> {
+    const db = await getDb();
+    await db.execute(
+        "UPDATE repositories SET last_pulled_at = CURRENT_TIMESTAMP WHERE id = $1",
+        [id],
+    );
 }

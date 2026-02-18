@@ -1,77 +1,118 @@
 import { useState } from "react";
-import { Plus } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useAddRepository } from "@core/api/useRepositories";
+import type { CSSProperties } from "react";
+import { Plus, Search } from "lucide-react";
 import { useAppStore } from "@core/store/app-store";
 import { ProjectList } from "./ProjectList";
 import { SidebarFooter } from "./SidebarFooter";
+import { AddProjectDialog } from "./AddProjectDialog";
 
-export function Sidebar() {
-    const addRepo = useAddRepository();
+interface SidebarProps {
+    style?: CSSProperties;
+}
+
+export function Sidebar({ style }: SidebarProps) {
     const setSelectedRepository = useAppStore((s) => s.setSelectedRepository);
-    const [error, setError] = useState<string | undefined>(undefined);
-
-    async function handleAddProject() {
-        setError(undefined);
-
-        const selected = await openDialog({
-            directory: true,
-            multiple: false,
-            title: "Select a project directory",
-        });
-
-        if (!selected) return;
-
-        const path = typeof selected === "string" ? selected : selected[0];
-        if (!path) return;
-
-        const name = path.split("/").pop() ?? "unknown";
-
-        addRepo.mutate(
-            { path, name },
-            {
-                onSuccess: (repo) => setSelectedRepository(repo.id),
-                onError: (err: Error) => setError(err.message),
-            },
-        );
-    }
+    const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+    const [search, setSearch] = useState("");
 
     return (
-        <aside className="flex w-64 flex-col border-r border-border bg-sidebar">
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 pb-3">
-                <h1 className="text-lg font-semibold text-sidebar-foreground">
-                    sustn
-                </h1>
+        <aside
+            className="flex shrink-0 flex-col border-r border-border bg-sidebar"
+            style={style}
+        >
+            {/* Brand */}
+            <div className="flex items-center border-b border-border px-4 py-[22px]">
+                <div className="flex items-center gap-2">
+                    <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 42 42"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="shrink-0 text-sidebar-foreground"
+                    >
+                        <path
+                            d="M24.3012 1.73511V19.0934M24.3012 36.4518V19.0934M36.5754 6.81925L12.027 31.3676M24.3012 19.0934L6.94287 19.0934M36.5754 31.3676L12.027 6.81925"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
+                    </svg>
+                    <span className="text-[13px] font-semibold text-sidebar-foreground tracking-tight">
+                        sustn
+                    </span>
+                </div>
             </div>
 
-            {/* Projects section */}
-            <div className="flex items-center justify-between px-4 pb-1">
-                <span className="text-[11px] font-medium uppercase tracking-wider text-sidebar-foreground/40">
-                    Projects
-                </span>
+            {/* Search + Add */}
+            <div className="flex items-center gap-1.5 px-3 pt-3 pb-2">
+                <div className="relative flex-1">
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-sidebar-foreground/40" />
+                    <input
+                        type="text"
+                        placeholder="Search projects..."
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="w-full rounded-md border border-sidebar-border bg-transparent py-1.5 pl-7 pr-2 text-[12px] text-sidebar-foreground placeholder:text-sidebar-foreground/35 focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                </div>
                 <button
                     type="button"
-                    onClick={() => void handleAddProject()}
-                    disabled={addRepo.isPending}
-                    className="rounded-md p-0.5 text-sidebar-foreground/40 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                    onClick={() => setIsAddDialogOpen(true)}
+                    className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md border border-sidebar-border text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
                     title="Add project"
                 >
                     <Plus className="h-3.5 w-3.5" />
                 </button>
             </div>
 
-            {error && (
-                <p className="px-4 py-1 text-xs text-destructive">{error}</p>
-            )}
-
             {/* Project list */}
             <div className="flex-1 overflow-hidden">
-                <ProjectList />
+                <ProjectList search={search} />
+            </div>
+
+            {/* AI Status */}
+            <div className="px-3 pb-3">
+                <div className="rounded-lg border border-sidebar-border/60 px-3 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                        <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 42 42"
+                            fill="none"
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="shrink-0 animate-slow-spin text-sidebar-foreground"
+                        >
+                            <path
+                                d="M24.3012 1.73511V19.0934M24.3012 36.4518V19.0934M36.5754 6.81925L12.027 31.3676M24.3012 19.0934L6.94287 19.0934M36.5754 31.3676L12.027 6.81925"
+                                stroke="currentColor"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        </svg>
+                        <div className="min-w-0">
+                            <p className="text-[11px] font-medium text-sidebar-foreground leading-tight">
+                                AI active
+                            </p>
+                            <p className="text-[10px] text-sidebar-foreground leading-tight mt-0.5">
+                                Watching for changes
+                            </p>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             {/* Footer */}
             <SidebarFooter />
+
+            {/* Add Project Dialog */}
+            <AddProjectDialog
+                open={isAddDialogOpen}
+                onOpenChange={setIsAddDialogOpen}
+                onSuccess={(repoId) => setSelectedRepository(repoId)}
+            />
         </aside>
     );
 }
