@@ -253,7 +253,7 @@ When done, output ONLY this JSON (no markdown, no explanation):
 }}"#
     );
 
-    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS).await?;
+    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None).await?;
 
     if !result.success {
         return Err(format!(
@@ -294,7 +294,7 @@ Output ONLY this JSON (no markdown, no explanation):
 }}"#
     );
 
-    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS).await?;
+    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None).await?;
 
     if !result.success {
         return Err(format!(

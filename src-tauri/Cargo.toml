@@ -32,3 +32,5 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 tokio = { version = "1", features = ["process", "sync", "time", "fs"] }
 log = "0.4"
+walkdir = "2"
+rusqlite = { version = "0.31", features = ["bundled"] }

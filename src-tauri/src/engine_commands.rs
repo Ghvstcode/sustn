@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use std::sync::Arc;
 
-use crate::engine::{self, budget, scanner, scheduler, worker, CurrentTask, EngineState, TaskPhase};
+use crate::engine::{self, budget, db, scanner, scheduler, worker, CurrentTask, EngineState, TaskPhase};
 
 /// Get the current budget status.
 #[tauri::command]
@@ -12,26 +12,115 @@ pub async fn engine_get_budget() -> Result<budget::BudgetStatus, String> {
 }
 
 /// Trigger an immediate scan of a repository.
+/// Pass 1 (quick scan) runs synchronously and returns results.
+/// Pass 2 (deep scan) spawns in the background if budget allows,
+/// persists tasks directly to DB, and emits an event when done.
 #[tauri::command]
 pub async fn engine_scan_now(
     app: AppHandle,
     repo_path: String,
     repository_id: String,
 ) -> Result<scanner::ScanResult, String> {
+    println!("[engine] engine_scan_now invoked — repo_path={repo_path}, repository_id={repository_id}");
+
     // Emit scan-started event
     let _ = app.emit("agent:scan-started", serde_json::json!({
         "repositoryId": repository_id,
     }));
 
+    // --- Pass 1: Quick scan (pre-read files, no tool use) ---
     let result = scanner::scan_repository(&repo_path).await;
 
-    // Emit scan-completed event
+    // Emit pass 1 completed event
     let _ = app.emit("agent:scan-completed", serde_json::json!({
         "repositoryId": repository_id,
         "tasksFound": result.tasks_found.len(),
         "success": result.success,
         "error": result.error,
     }));
+
+    // --- Pass 2: Deep scan (background, if budget allows) ---
+    if result.success && !result.tasks_found.is_empty() {
+        let config = budget::BudgetConfig::default();
+        let status = budget::calculate_budget_status(&config);
+
+        if !status.budget_exhausted {
+            let pass1_titles: Vec<String> = result
+                .tasks_found
+                .iter()
+                .map(|t| t.title.clone())
+                .collect();
+            let app_clone = app.clone();
+            let repo_path_clone = repo_path.clone();
+            let repo_id_clone = repository_id.clone();
+
+            tokio::spawn(async move {
+                println!("[engine] deep scan starting for repository {repo_id_clone}");
+
+                let _ = app_clone.emit("agent:scan-deep-started", serde_json::json!({
+                    "repositoryId": repo_id_clone,
+                }));
+
+                let deep_result = scanner::deep_scan_repository(
+                    &repo_path_clone,
+                    &pass1_titles,
+                )
+                .await;
+
+                if deep_result.success && !deep_result.tasks_found.is_empty() {
+                    // Persist tasks directly to DB
+                    let app_data_dir = match app_clone.path().app_data_dir() {
+                        Ok(dir) => dir,
+                        Err(e) => {
+                            println!("[engine] deep scan — failed to get app data dir: {e}");
+                            let _ = app_clone.emit("agent:scan-deep-failed", serde_json::json!({
+                                "repositoryId": repo_id_clone,
+                                "error": format!("Failed to get app data dir: {e}"),
+                            }));
+                            return;
+                        }
+                    };
+
+                    match db::save_scanned_tasks(
+                        &app_data_dir,
+                        &repo_id_clone,
+                        &deep_result.tasks_found,
+                    ) {
+                        Ok(task_ids) => {
+                            println!(
+                                "[engine] deep scan completed — {} new tasks persisted",
+                                task_ids.len()
+                            );
+                            let _ = app_clone.emit("agent:scan-deep-completed", serde_json::json!({
+                                "repositoryId": repo_id_clone,
+                                "tasksFound": task_ids.len(),
+                                "taskIds": task_ids,
+                            }));
+                        }
+                        Err(e) => {
+                            println!("[engine] deep scan — failed to save tasks: {e}");
+                            let _ = app_clone.emit("agent:scan-deep-failed", serde_json::json!({
+                                "repositoryId": repo_id_clone,
+                                "error": e,
+                            }));
+                        }
+                    }
+                } else {
+                    println!(
+                        "[engine] deep scan completed — no additional tasks found (success={}, error={:?})",
+                        deep_result.success, deep_result.error
+                    );
+                    let _ = app_clone.emit("agent:scan-deep-completed", serde_json::json!({
+                        "repositoryId": repo_id_clone,
+                        "tasksFound": 0,
+                        "taskIds": serde_json::Value::Array(vec![]),
+                    }));
+                }
+            });
+        } else {
+            println!("[engine] deep scan skipped — budget exhausted");
+        }
+    }
 
     Ok(result)
 }

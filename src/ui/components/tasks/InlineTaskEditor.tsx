@@ -25,6 +25,10 @@ const categoryLabels: Record<TaskCategory, string> = {
     tests: "Tests",
     docs: "Docs",
     security: "Security",
+    feature: "Feature",
+    performance: "Performance",
+    dx: "DX",
+    observability: "Observability",
     general: "General",
 };
 

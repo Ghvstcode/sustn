@@ -21,6 +21,7 @@ import {
 } from "@core/api/useTasks";
 import { useRepositories } from "@core/api/useRepositories";
 import { useScanNow } from "@core/api/useEngine";
+import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "@core/store/app-store";
 import type { TaskCategory } from "@core/types/task";
 import { TaskListHeader } from "./TaskListHeader";
@@ -45,6 +46,40 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
     const scanNow = useScanNow();
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
+
+    // Track deep scan (pass 2) via Tauri events
+    const [isDeepScanning, setIsDeepScanning] = useState(false);
+    useEffect(() => {
+        const unlistenStart = listen<{ repositoryId: string }>(
+            "agent:scan-deep-started",
+            (event) => {
+                if (event.payload.repositoryId === repositoryId) {
+                    setIsDeepScanning(true);
+                }
+            },
+        );
+        const unlistenEnd = listen<{ repositoryId: string }>(
+            "agent:scan-deep-completed",
+            (event) => {
+                if (event.payload.repositoryId === repositoryId) {
+                    setIsDeepScanning(false);
+                }
+            },
+        );
+        const unlistenFail = listen<{ repositoryId: string }>(
+            "agent:scan-deep-failed",
+            (event) => {
+                if (event.payload.repositoryId === repositoryId) {
+                    setIsDeepScanning(false);
+                }
+            },
+        );
+        return () => {
+            void unlistenStart.then((fn) => fn());
+            void unlistenEnd.then((fn) => fn());
+            void unlistenFail.then((fn) => fn());
+        };
+    }, [repositoryId]);
 
     // Track new tasks found during scan
     const [scanTasksFound, setScanTasksFound] = useState(0);
@@ -197,6 +232,7 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
     function handleScan() {
         if (!repo) return;
         setScanTasksFound(0);
+        console.log("handleScan");
         taskCountBeforeScan.current = tasks?.length ?? 0;
         scanNow.mutate({
             repoPath: repo.path,
@@ -221,6 +257,7 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
             {/* Discovery banner */}
             <DiscoveryBanner
                 isScanning={scanNow.isPending}
+                isDeepScanning={isDeepScanning}
                 tasksFound={scanTasksFound}
             />
 

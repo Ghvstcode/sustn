@@ -35,6 +35,10 @@ const categoryLabels: Record<string, string> = {
     tests: "Tests",
     docs: "Docs",
     security: "Security",
+    feature: "Feature",
+    performance: "Performance",
+    dx: "DX",
+    observability: "Observability",
     general: "General",
 };
 
@@ -238,14 +242,15 @@ export function TaskRow({
                                 </span>
                             )}
 
-                            {task.category !== "general" && (
-                                <Badge
-                                    variant="secondary"
-                                    className="text-[10px] shrink-0"
-                                >
-                                    {categoryLabels[task.category]}
-                                </Badge>
-                            )}
+                            {task.category !== "general" &&
+                                categoryLabels[task.category] && (
+                                    <Badge
+                                        variant="secondary"
+                                        className="text-[10px] shrink-0"
+                                    >
+                                        {categoryLabels[task.category]}
+                                    </Badge>
+                                )}
                         </div>
 
                         <span className="truncate text-xs text-muted-foreground/60">

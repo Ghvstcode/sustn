@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
     getAgentConfig,
     updateAgentConfig,
@@ -114,11 +115,13 @@ export function useScanNow() {
             repositoryId: string;
             baseBranch?: string;
         }) => {
+            console.log("scanNow", repoPath, repositoryId, baseBranch);
             // 1. Run the scan via Rust
             const result = await invoke<ScanResult>("engine_scan_now", {
                 repoPath,
                 repositoryId,
             });
+            console.log("result", result);
 
             // 2. Progressively insert discovered tasks into the DB
             if (result.tasksFound.length > 0) {
@@ -153,6 +156,41 @@ export function useScanNow() {
             });
         },
     });
+}
+
+// ── Deep Scan Event Listener ────────────────────────────────
+
+/**
+ * Listens for deep scan (Pass 2) completion events from the Rust backend.
+ * When a deep scan finishes, tasks are already persisted in the DB —
+ * we just need to invalidate the query cache so the UI refreshes.
+ */
+export function useDeepScanListener(repositoryId: string | undefined) {
+    const queryClient = useQueryClient();
+
+    useEffect(() => {
+        if (!repositoryId) return;
+
+        const unlisten = listen<{
+            repositoryId: string;
+            tasksFound: number;
+            taskIds: string[];
+        }>("agent:scan-deep-completed", (event) => {
+            if (event.payload.repositoryId !== repositoryId) return;
+            if (event.payload.tasksFound > 0) {
+                console.log(
+                    `[deep scan] ${event.payload.tasksFound} additional task(s) discovered`,
+                );
+                void queryClient.invalidateQueries({
+                    queryKey: ["tasks", repositoryId],
+                });
+            }
+        });
+
+        return () => {
+            void unlisten.then((fn) => fn());
+        };
+    }, [repositoryId, queryClient]);
 }
 
 // ── Working ─────────────────────────────────────────────────

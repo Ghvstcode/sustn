@@ -3,6 +3,10 @@ export type TaskCategory =
     | "tests"
     | "docs"
     | "security"
+    | "feature"
+    | "performance"
+    | "dx"
+    | "observability"
     | "general";
 
 export type TaskState =

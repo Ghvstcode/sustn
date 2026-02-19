@@ -96,6 +96,14 @@ export function AddTaskDialog({
                                 <SelectItem value="security">
                                     Security
                                 </SelectItem>
+                                <SelectItem value="feature">Feature</SelectItem>
+                                <SelectItem value="performance">
+                                    Performance
+                                </SelectItem>
+                                <SelectItem value="dx">DX</SelectItem>
+                                <SelectItem value="observability">
+                                    Observability
+                                </SelectItem>
                             </SelectContent>
                         </Select>
                     </div>
