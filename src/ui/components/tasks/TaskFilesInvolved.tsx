@@ -8,21 +8,16 @@ export function TaskFilesInvolved({ files }: TaskFilesInvolvedProps) {
     if (files.length === 0) return null;
 
     return (
-        <div>
-            <h3 className="text-sm font-medium text-foreground mb-2">
-                Files Involved
-            </h3>
-            <div className="space-y-1">
-                {files.map((file) => (
-                    <div
-                        key={file}
-                        className="flex items-center gap-2 rounded px-2 py-1 text-xs font-mono text-muted-foreground hover:bg-muted/50 transition-colors"
-                    >
-                        <FileCode2 className="h-3 w-3 shrink-0" />
-                        <span className="truncate">{file}</span>
-                    </div>
-                ))}
-            </div>
+        <div className="flex flex-wrap gap-1.5">
+            {files.map((file) => (
+                <span
+                    key={file}
+                    className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-2 py-0.5 text-[11px] font-mono text-muted-foreground"
+                >
+                    <FileCode2 className="h-2.5 w-2.5 shrink-0" />
+                    <span className="truncate max-w-[200px]">{file}</span>
+                </span>
+            ))}
         </div>
     );
 }

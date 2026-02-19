@@ -23,6 +23,9 @@ interface TaskActionsProps {
     onRequestChanges?: () => void;
 }
 
+const btnClass =
+    "group h-7 gap-1.5 text-xs transition-all duration-200 hover:-translate-y-px hover:shadow-sm active:translate-y-0 active:shadow-none";
+
 export function TaskActions({
     task,
     isStarting,
@@ -35,19 +38,19 @@ export function TaskActions({
     const { state } = task;
 
     return (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
             {/* Pending: Start Work */}
             {state === "pending" && onStartWork && (
                 <Button
                     size="sm"
-                    className="gap-1.5"
+                    className={btnClass}
                     onClick={onStartWork}
                     disabled={isStarting}
                 >
                     {isStarting ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                        <Play className="h-3.5 w-3.5" />
+                        <Play className="h-3.5 w-3.5 transition-transform duration-200 group-hover:scale-110" />
                     )}
                     Start Work
                 </Button>
@@ -59,7 +62,7 @@ export function TaskActions({
                     {onCreatePr && !task.prUrl && (
                         <Button
                             size="sm"
-                            className="gap-1.5"
+                            className={btnClass}
                             onClick={onCreatePr}
                             disabled={isPushing}
                         >
@@ -76,7 +79,7 @@ export function TaskActions({
                         <Button
                             size="sm"
                             variant="outline"
-                            className="gap-1.5"
+                            className={btnClass}
                             onClick={() => void openUrl(task.prUrl!)}
                         >
                             <ExternalLink className="h-3.5 w-3.5" />
@@ -88,7 +91,7 @@ export function TaskActions({
                         <Button
                             size="sm"
                             variant="outline"
-                            className="gap-1.5"
+                            className={btnClass}
                             onClick={onRequestChanges}
                         >
                             <MessageSquarePlus className="h-3.5 w-3.5" />
@@ -99,7 +102,7 @@ export function TaskActions({
                     <Button
                         size="sm"
                         variant="outline"
-                        className="gap-1.5"
+                        className={btnClass}
                         onClick={() => onUpdateState("done")}
                     >
                         <CheckCircle2 className="h-3.5 w-3.5" />
@@ -115,7 +118,7 @@ export function TaskActions({
                         <Button
                             size="sm"
                             variant="outline"
-                            className="gap-1.5"
+                            className={btnClass}
                             onClick={() => void openUrl(task.prUrl!)}
                         >
                             <ExternalLink className="h-3.5 w-3.5" />
@@ -125,7 +128,7 @@ export function TaskActions({
                     <Button
                         size="sm"
                         variant="ghost"
-                        className="gap-1.5 text-muted-foreground"
+                        className="gap-1.5 text-xs text-muted-foreground/60 hover:text-muted-foreground"
                         onClick={() => onUpdateState("pending")}
                     >
                         <RotateCcw className="h-3.5 w-3.5" />
@@ -139,7 +142,7 @@ export function TaskActions({
                 <>
                     <Button
                         size="sm"
-                        className="gap-1.5"
+                        className={btnClass}
                         onClick={() => onUpdateState("pending")}
                     >
                         <RotateCcw className="h-3.5 w-3.5" />
@@ -147,7 +150,7 @@ export function TaskActions({
                     </Button>
                     {task.lastError && (
                         <div className="flex items-center gap-1.5 text-xs text-destructive">
-                            <AlertTriangle className="h-3.5 w-3.5" />
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                             <span className="truncate max-w-[300px]">
                                 {task.lastError}
                             </span>
@@ -164,7 +167,7 @@ export function TaskActions({
                     <Button
                         size="sm"
                         variant="ghost"
-                        className="gap-1.5 text-muted-foreground"
+                        className="gap-1.5 text-xs text-muted-foreground/60 hover:text-muted-foreground"
                         onClick={() => onUpdateState("dismissed")}
                     >
                         <XCircle className="h-3.5 w-3.5" />

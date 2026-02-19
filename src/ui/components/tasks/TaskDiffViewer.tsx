@@ -8,6 +8,7 @@ import "react-diff-view/style/index.css";
 interface TaskDiffViewerProps {
     diffText: string;
     activeFile?: string;
+    singleFile?: string;
 }
 
 // ── File diff section ──────────────────────────────────────
@@ -102,17 +103,26 @@ function FileDiff({
 
 // ── Main diff viewer ───────────────────────────────────────
 
-export function TaskDiffViewer({ diffText, activeFile }: TaskDiffViewerProps) {
+export function TaskDiffViewer({
+    diffText,
+    activeFile,
+    singleFile,
+}: TaskDiffViewerProps) {
     const [viewType, setViewType] = useState<ViewType>("unified");
 
     const files = useMemo(() => {
         if (!diffText) return [];
         try {
-            return parseDiff(diffText);
+            const parsed = parseDiff(diffText);
+            if (!singleFile) return parsed;
+            return parsed.filter((f) => {
+                const name = f.newPath === "/dev/null" ? f.oldPath : f.newPath;
+                return name === singleFile;
+            });
         } catch {
             return [];
         }
-    }, [diffText]);
+    }, [diffText, singleFile]);
 
     if (files.length === 0) {
         return (
@@ -128,8 +138,17 @@ export function TaskDiffViewer({ diffText, activeFile }: TaskDiffViewerProps) {
         <div>
             {/* Controls */}
             <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium text-foreground">Changes</h3>
-                <div className="flex items-center gap-1">
+                {singleFile ? (
+                    <span className="text-xs font-mono text-muted-foreground/50 truncate">
+                        {singleFile}
+                    </span>
+                ) : (
+                    <span className="text-xs text-muted-foreground/50">
+                        {files.length} {files.length === 1 ? "file" : "files"}{" "}
+                        changed
+                    </span>
+                )}
+                <div className="flex items-center gap-1 shrink-0">
                     <Button
                         variant={viewType === "unified" ? "secondary" : "ghost"}
                         size="sm"

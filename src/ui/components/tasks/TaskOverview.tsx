@@ -1,3 +1,5 @@
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Task } from "@core/types/task";
 
 interface TaskOverviewProps {
@@ -7,23 +9,17 @@ interface TaskOverviewProps {
 export function TaskOverview({ task }: TaskOverviewProps) {
     if (!task.description) {
         return (
-            <div className="rounded-lg border border-border bg-muted/30 p-4">
-                <p className="text-xs text-muted-foreground/70">
-                    No description yet. The agent will generate a detailed
-                    analysis when it scans or works on this task.
-                </p>
-            </div>
+            <p className="text-sm italic text-muted-foreground/40">
+                No description provided
+            </p>
         );
     }
 
     return (
-        <div>
-            <h3 className="text-sm font-medium text-foreground mb-2">
-                Description
-            </h3>
-            <div className="text-sm text-foreground/90 leading-relaxed whitespace-pre-wrap">
+        <div className="prose prose-sm max-w-none text-foreground/80 prose-headings:text-foreground prose-headings:font-semibold prose-p:text-foreground/80 prose-strong:text-foreground prose-a:text-primary prose-a:no-underline hover:prose-a:underline prose-blockquote:text-muted-foreground prose-blockquote:border-border prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-foreground prose-code:text-[0.85em] prose-code:before:content-none prose-code:after:content-none prose-pre:bg-muted prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-li:text-foreground/80 prose-th:text-foreground prose-hr:border-border">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {task.description}
-            </div>
+            </ReactMarkdown>
         </div>
     );
 }

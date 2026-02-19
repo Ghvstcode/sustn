@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import {
     ArrowRight,
     MessageSquare,
@@ -7,23 +7,14 @@ import {
     FileText,
     Tag,
     Link,
-    Send,
     Bot,
     User,
 } from "lucide-react";
-import { Button } from "@ui/components/ui/button";
-import { Textarea } from "@ui/components/ui/textarea";
-import {
-    useTaskEvents,
-    useTaskMessages,
-    useSendMessage,
-} from "@core/api/useTasks";
-import type { TaskEvent } from "@core/types/task";
-import type { TaskMessage } from "@core/types/task";
+import { useTaskEvents, useTaskMessages } from "@core/api/useTasks";
+import type { TaskEvent, TaskMessage } from "@core/types/task";
 
 interface TaskChatTimelineProps {
     taskId: string;
-    readOnly?: boolean;
 }
 
 // ── Timeline item types ────────────────────────────────────
@@ -142,14 +133,14 @@ function EventDescription({ event }: { event: TaskEvent }) {
 
 function SystemEvent({ event }: { event: TaskEvent }) {
     return (
-        <div className="flex items-center gap-2 py-2">
-            <div className="flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground">
+        <div className="flex items-center gap-2 py-1.5">
+            <div className="flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shrink-0">
                 <EventIcon eventType={event.eventType} />
             </div>
             <span className="text-xs text-muted-foreground leading-relaxed flex-1">
                 <EventDescription event={event} />
             </span>
-            <span className="text-[10px] text-muted-foreground/50 shrink-0">
+            <span className="text-[10px] text-muted-foreground/40 shrink-0">
                 {formatRelativeTime(event.createdAt)}
             </span>
         </div>
@@ -164,36 +155,40 @@ function ChatBubble({ message }: { message: TaskMessage }) {
 
     return (
         <div
-            className={`flex gap-2 py-2 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+            className={`flex gap-2.5 py-1.5 ${isUser ? "flex-row-reverse" : "flex-row"}`}
         >
             <div
                 className={`flex h-6 w-6 items-center justify-center rounded-full shrink-0 ${
                     isAgent
                         ? "bg-primary/10 text-primary"
-                        : "bg-muted text-muted-foreground"
+                        : isUser
+                          ? "bg-foreground/10 text-foreground/70"
+                          : "bg-muted text-muted-foreground"
                 }`}
             >
                 {isAgent ? (
-                    <Bot className="h-3.5 w-3.5" />
+                    <Bot className="h-3 w-3" />
                 ) : (
-                    <User className="h-3.5 w-3.5" />
+                    <User className="h-3 w-3" />
                 )}
             </div>
             <div
-                className={`max-w-[80%] rounded-lg px-3 py-2 ${
+                className={`max-w-[80%] rounded-xl px-3.5 py-2.5 ${
                     isUser
-                        ? "bg-primary text-primary-foreground"
+                        ? "bg-foreground text-background"
                         : isAgent
-                          ? "bg-muted"
-                          : "bg-muted/50"
+                          ? "bg-muted/70"
+                          : "bg-muted/40"
                 }`}
             >
-                <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                    {message.content}
+                </p>
                 <p
-                    className={`text-[10px] mt-1 ${
+                    className={`text-[10px] mt-1.5 ${
                         isUser
-                            ? "text-primary-foreground/50"
-                            : "text-muted-foreground/50"
+                            ? "text-background/40"
+                            : "text-muted-foreground/40"
                     }`}
                 >
                     {formatRelativeTime(message.createdAt)}
@@ -203,65 +198,11 @@ function ChatBubble({ message }: { message: TaskMessage }) {
     );
 }
 
-// ── Chat input ─────────────────────────────────────────────
-
-function ChatInput({
-    taskId,
-    placeholder,
-}: {
-    taskId: string;
-    placeholder?: string;
-}) {
-    const [draft, setDraft] = useState("");
-    const sendMessage = useSendMessage();
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-    function handleSend() {
-        const trimmed = draft.trim();
-        if (!trimmed) return;
-
-        sendMessage.mutate(
-            { taskId, role: "user", content: trimmed },
-            { onSuccess: () => setDraft("") },
-        );
-    }
-
-    function handleKeyDown(e: React.KeyboardEvent) {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
-    }
-
-    return (
-        <div className="flex gap-2 pt-3 border-t border-border">
-            <Textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={placeholder ?? "Add context for the agent..."}
-                rows={1}
-                className="resize-none text-sm min-h-[36px] max-h-[120px]"
-            />
-            <Button
-                size="sm"
-                className="shrink-0 h-9 w-9 p-0"
-                onClick={handleSend}
-                disabled={!draft.trim() || sendMessage.isPending}
-            >
-                <Send className="h-3.5 w-3.5" />
-            </Button>
-        </div>
-    );
-}
-
 // ── Main component ─────────────────────────────────────────
 
-export function TaskChatTimeline({ taskId, readOnly }: TaskChatTimelineProps) {
+export function TaskChatTimeline({ taskId }: TaskChatTimelineProps) {
     const { data: events } = useTaskEvents(taskId);
     const { data: messages } = useTaskMessages(taskId);
-    const scrollRef = useRef<HTMLDivElement>(null);
 
     // Merge events and messages into a unified timeline
     const timeline = useMemo<TimelineItem[]>(() => {
@@ -269,7 +210,6 @@ export function TaskChatTimeline({ taskId, readOnly }: TaskChatTimelineProps) {
 
         if (events) {
             for (const event of events) {
-                // Skip "comment" events — those are now handled via task_messages
                 if (event.eventType === "comment") continue;
                 items.push({ kind: "event", data: event });
             }
@@ -281,63 +221,35 @@ export function TaskChatTimeline({ taskId, readOnly }: TaskChatTimelineProps) {
             }
         }
 
-        // Sort chronologically (oldest first)
         items.sort(
             (a, b) =>
-                new Date(
-                    a.kind === "event" ? a.data.createdAt : a.data.createdAt,
-                ).getTime() -
-                new Date(
-                    b.kind === "event" ? b.data.createdAt : b.data.createdAt,
-                ).getTime(),
+                new Date(a.data.createdAt).getTime() -
+                new Date(b.data.createdAt).getTime(),
         );
 
         return items;
     }, [events, messages]);
 
-    // Auto-scroll to bottom when new items appear
-    useEffect(() => {
-        if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
-    }, [timeline.length]);
-
     return (
-        <div className="flex flex-col">
-            <h3 className="text-sm font-medium text-foreground mb-2">
-                Activity & Chat
-            </h3>
-
-            {/* Timeline */}
-            <div
-                ref={scrollRef}
-                className="max-h-[400px] overflow-y-auto space-y-0.5 pr-1"
-            >
-                {timeline.length === 0 && (
-                    <p className="text-xs text-muted-foreground/60 py-2">
-                        No activity yet.
-                    </p>
-                )}
-                {timeline.map((item) => {
-                    if (item.kind === "event") {
-                        return (
-                            <SystemEvent
-                                key={`e-${item.data.id}`}
-                                event={item.data}
-                            />
-                        );
-                    }
+        <div className="space-y-0.5">
+            {timeline.length === 0 && (
+                <p className="text-xs text-muted-foreground/40 py-2">
+                    No activity yet
+                </p>
+            )}
+            {timeline.map((item) => {
+                if (item.kind === "event") {
                     return (
-                        <ChatBubble
-                            key={`m-${item.data.id}`}
-                            message={item.data}
+                        <SystemEvent
+                            key={`e-${item.data.id}`}
+                            event={item.data}
                         />
                     );
-                })}
-            </div>
-
-            {/* Input */}
-            {!readOnly && <ChatInput taskId={taskId} />}
+                }
+                return (
+                    <ChatBubble key={`m-${item.data.id}`} message={item.data} />
+                );
+            })}
         </div>
     );
 }

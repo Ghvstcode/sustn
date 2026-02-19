@@ -34,6 +34,8 @@ import type { Task } from "@core/types/task";
 interface TaskDetailHeaderProps {
     task: Task;
     repoPath: string | undefined;
+    primaryAction?: React.ReactNode;
+    overflowItems?: React.ReactNode;
     onBack: () => void;
     onUpdateTitle: (title: string) => void;
     onDelete: () => void;
@@ -42,6 +44,8 @@ interface TaskDetailHeaderProps {
 export function TaskDetailHeader({
     task,
     repoPath,
+    primaryAction,
+    overflowItems,
     onBack,
     onUpdateTitle,
     onDelete,
@@ -195,6 +199,9 @@ export function TaskDetailHeader({
                 </TooltipProvider>
             )}
 
+            {/* Primary action */}
+            {primaryAction}
+
             {/* Open in… */}
             {repoPath && (
                 <DropdownMenu>
@@ -253,6 +260,8 @@ export function TaskDetailHeader({
                     </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                    {overflowItems}
+                    {overflowItems && <DropdownMenuSeparator />}
                     <DropdownMenuItem
                         onClick={onDelete}
                         className="text-destructive focus:text-destructive"
