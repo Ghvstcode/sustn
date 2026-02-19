@@ -8,8 +8,15 @@ import {
     reorderTask as dbReorderTask,
     addComment as dbAddComment,
     listTaskEvents,
+    createMessage as dbCreateMessage,
+    listMessages as dbListMessages,
 } from "@core/db/tasks";
-import type { Task, TaskCategory, TaskState } from "@core/types/task";
+import type {
+    Task,
+    TaskCategory,
+    TaskState,
+    MessageRole,
+} from "@core/types/task";
 
 export function useTasks(
     repositoryId: string | undefined,
@@ -66,6 +73,12 @@ export function useUpdateTask() {
             notes?: string;
             prUrl?: string;
             category?: TaskCategory;
+            branchName?: string;
+            commitSha?: string;
+            lastError?: string;
+            startedAt?: string;
+            completedAt?: string;
+            filesInvolved?: string[];
         }) => dbUpdateTask(id, fields),
         onSuccess: (task) => {
             void queryClient.invalidateQueries({
@@ -166,6 +179,37 @@ export function useAddComment() {
         onSuccess: (event) => {
             void queryClient.invalidateQueries({
                 queryKey: ["task-events", event.taskId],
+            });
+        },
+    });
+}
+
+export function useTaskMessages(taskId: string | undefined) {
+    return useQuery({
+        queryKey: ["task-messages", taskId],
+        queryFn: () => dbListMessages(taskId!),
+        enabled: !!taskId,
+    });
+}
+
+export function useSendMessage() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: ({
+            taskId,
+            role,
+            content,
+            metadata,
+        }: {
+            taskId: string;
+            role: MessageRole;
+            content: string;
+            metadata?: Record<string, unknown>;
+        }) => dbCreateMessage(taskId, role, content, metadata),
+        onSuccess: (message) => {
+            void queryClient.invalidateQueries({
+                queryKey: ["task-messages", message.taskId],
             });
         },
     });

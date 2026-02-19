@@ -46,7 +46,9 @@ pub async fn execute_task(
     files_involved: &[String],
     max_retries: u32,
 ) -> WorkResult {
+    println!("[worker] execute_task START — task_id={task_id}, title={task_title}, files={files_involved:?}");
     let branch_name = git::task_branch_name(task_id);
+    println!("[worker] branch_name={branch_name}");
 
     // Save original branch so we can return to it
     let original_branch = git::current_branch(repo_path);
@@ -118,14 +120,29 @@ pub async fn execute_task(
 
     loop {
         attempt += 1;
+        println!("[worker] === attempt {attempt}/{} ===", max_retries + 1);
 
+        println!("[worker] running implement phase...");
         let implement_result =
             run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback)
                 .await;
 
         match implement_result {
+            Ok(ref impl_output) => {
+                println!(
+                    "[worker] implement phase OK — summary={:?}, files_modified={:?}",
+                    impl_output.summary, impl_output.files_modified
+                );
+            }
+            Err(ref e) => {
+                println!("[worker] implement phase FAILED — {e}");
+            }
+        }
+
+        match implement_result {
             Ok(impl_output) => {
                 // Run review phase
+                println!("[worker] running review phase...");
                 let review_result = run_review_phase(
                     repo_path,
                     task_title,
@@ -134,9 +151,22 @@ pub async fn execute_task(
                 .await;
 
                 match review_result {
+                    Ok(ref review) => {
+                        println!(
+                            "[worker] review phase result — passed={:?}, feedback={:?}, issues={:?}",
+                            review.passed, review.feedback, review.issues
+                        );
+                    }
+                    Err(ref e) => {
+                        println!("[worker] review phase FAILED — {e}");
+                    }
+                }
+
+                match review_result {
                     Ok(review) if review.passed.unwrap_or(false) => {
                         // Success — get commit SHA and return to original branch
                         let sha = git::latest_commit_sha(repo_path);
+                        println!("[worker] REVIEW PASSED — sha={:?}, returning to branch {original_branch_name}", sha.output);
                         let _ = git::checkout_branch(repo_path, &original_branch_name);
 
                         return WorkResult {
@@ -157,6 +187,7 @@ pub async fn execute_task(
                     }
                     Ok(review) => {
                         // Review failed — retry if we can
+                        println!("[worker] REVIEW REJECTED (attempt {attempt}) — retrying? {}", attempt <= max_retries);
                         last_feedback = review.feedback.clone();
                         if attempt > max_retries {
                             let _ =
@@ -253,7 +284,12 @@ When done, output ONLY this JSON (no markdown, no explanation):
 }}"#
     );
 
+    println!("[worker:implement] invoking Claude CLI — prompt_len={}", prompt.len());
     let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None).await?;
+    println!(
+        "[worker:implement] Claude CLI returned — success={}, exit={:?}, stdout_len={}, stderr_len={}",
+        result.success, result.exit_code, result.stdout.len(), result.stderr.len()
+    );
 
     if !result.success {
         return Err(format!(
@@ -264,7 +300,9 @@ When done, output ONLY this JSON (no markdown, no explanation):
     }
 
     // Try to parse structured output; fall back to a default if output isn't clean JSON
-    parse_implement_output(&result.stdout)
+    let parsed = parse_implement_output(&result.stdout);
+    println!("[worker:implement] parsed output: {parsed:?}");
+    parsed
 }
 
 async fn run_review_phase(
@@ -294,7 +332,12 @@ Output ONLY this JSON (no markdown, no explanation):
 }}"#
     );
 
+    println!("[worker:review] invoking Claude CLI — prompt_len={}", prompt.len());
     let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None).await?;
+    println!(
+        "[worker:review] Claude CLI returned — success={}, exit={:?}, stdout_len={}, stderr_len={}",
+        result.success, result.exit_code, result.stdout.len(), result.stderr.len()
+    );
 
     if !result.success {
         return Err(format!(
@@ -304,19 +347,24 @@ Output ONLY this JSON (no markdown, no explanation):
         ));
     }
 
-    parse_review_output(&result.stdout)
+    let parsed = parse_review_output(&result.stdout);
+    println!("[worker:review] parsed output: {parsed:?}");
+    parsed
 }
 
 fn parse_implement_output(output: &str) -> Result<ImplementOutput, String> {
     let trimmed = output.trim();
+    println!("[worker:parse_impl] raw output (first 500 chars): {}", &trimmed[..trimmed.len().min(500)]);
 
     // Try Claude's JSON wrapper first
     if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(trimmed) {
         if let Some(result_str) = wrapper.get("result").and_then(|v| v.as_str()) {
             if let Ok(parsed) = serde_json::from_str::<ImplementOutput>(result_str) {
+                println!("[worker:parse_impl] parsed via JSON wrapper → result field");
                 return Ok(parsed);
             }
             if let Some(parsed) = extract_json_object::<ImplementOutput>(result_str) {
+                println!("[worker:parse_impl] parsed via JSON wrapper → extracted from result field");
                 return Ok(parsed);
             }
         }
@@ -324,15 +372,18 @@ fn parse_implement_output(output: &str) -> Result<ImplementOutput, String> {
 
     // Direct parse
     if let Ok(parsed) = serde_json::from_str::<ImplementOutput>(trimmed) {
+        println!("[worker:parse_impl] parsed via direct JSON");
         return Ok(parsed);
     }
 
     // Extract from prose
     if let Some(parsed) = extract_json_object::<ImplementOutput>(trimmed) {
+        println!("[worker:parse_impl] parsed via JSON extraction from prose");
         return Ok(parsed);
     }
 
     // Fallback: treat it as unstructured output — the work may still have succeeded
+    println!("[worker:parse_impl] FALLBACK — output was not structured JSON");
     Ok(ImplementOutput {
         files_modified: None,
         summary: Some("Implementation completed (output was not structured JSON)".to_string()),
@@ -342,29 +393,35 @@ fn parse_implement_output(output: &str) -> Result<ImplementOutput, String> {
 
 fn parse_review_output(output: &str) -> Result<ReviewOutput, String> {
     let trimmed = output.trim();
+    println!("[worker:parse_review] raw output (first 500 chars): {}", &trimmed[..trimmed.len().min(500)]);
 
     // Try Claude's JSON wrapper first
     if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(trimmed) {
         if let Some(result_str) = wrapper.get("result").and_then(|v| v.as_str()) {
             if let Ok(parsed) = serde_json::from_str::<ReviewOutput>(result_str) {
+                println!("[worker:parse_review] parsed via JSON wrapper → result field");
                 return Ok(parsed);
             }
             if let Some(parsed) = extract_json_object::<ReviewOutput>(result_str) {
+                println!("[worker:parse_review] parsed via JSON wrapper → extracted from result field");
                 return Ok(parsed);
             }
         }
     }
 
     if let Ok(parsed) = serde_json::from_str::<ReviewOutput>(trimmed) {
+        println!("[worker:parse_review] parsed via direct JSON");
         return Ok(parsed);
     }
 
     if let Some(parsed) = extract_json_object::<ReviewOutput>(trimmed) {
+        println!("[worker:parse_review] parsed via JSON extraction from prose");
         return Ok(parsed);
     }
 
     // Default: assume review passed if we couldn't parse output
     // (better to let the user review than to block on parse failure)
+    println!("[worker:parse_review] FALLBACK — defaulting to passed");
     Ok(ReviewOutput {
         passed: Some(true),
         feedback: Some("Review output was not structured JSON — defaulting to passed".to_string()),

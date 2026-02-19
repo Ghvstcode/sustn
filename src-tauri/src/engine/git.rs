@@ -121,6 +121,49 @@ pub fn list_branches(cwd: &str) -> Vec<BranchInfo> {
         .collect()
 }
 
+/// Get a unified diff between two branches.
+pub fn diff_branches(cwd: &str, base_branch: &str, head_branch: &str) -> GitResult {
+    run_git(cwd, &["diff", &format!("{}...{}", base_branch, head_branch)])
+}
+
+/// Get diff statistics (files changed, insertions, deletions) between two branches.
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffFileStat {
+    pub file: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+pub fn diff_stat(cwd: &str, base_branch: &str, head_branch: &str) -> Vec<DiffFileStat> {
+    let result = run_git(
+        cwd,
+        &["diff", "--numstat", &format!("{}...{}", base_branch, head_branch)],
+    );
+    if !result.success {
+        return vec![];
+    }
+
+    result
+        .output
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() == 3 {
+                let additions = parts[0].parse::<u32>().unwrap_or(0);
+                let deletions = parts[1].parse::<u32>().unwrap_or(0);
+                Some(DiffFileStat {
+                    file: parts[2].to_string(),
+                    additions,
+                    deletions,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Generate a branch name for a task.
 pub fn task_branch_name(task_id: &str) -> String {
     // Use first 8 chars of UUID for readability

@@ -1,64 +1,166 @@
 import { Button } from "@ui/components/ui/button";
-import { Play, GitPullRequest, CheckCircle2, XCircle } from "lucide-react";
-import type { TaskState } from "@core/types/task";
+import {
+    Play,
+    GitPullRequest,
+    CheckCircle2,
+    XCircle,
+    RotateCcw,
+    MessageSquarePlus,
+    ExternalLink,
+    AlertTriangle,
+    Loader2,
+} from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import type { Task, TaskState } from "@core/types/task";
 
 interface TaskActionsProps {
-    state: TaskState;
+    task: Task;
+    isStarting?: boolean;
+    isPushing?: boolean;
     onUpdateState: (state: TaskState) => void;
+    onStartWork?: () => void;
+    onCreatePr?: () => void;
+    onRequestChanges?: () => void;
 }
 
-export function TaskActions({ state, onUpdateState }: TaskActionsProps) {
-    return (
-        <div>
-            <h3 className="text-sm font-medium text-foreground mb-2">
-                Actions
-            </h3>
-            <div className="flex flex-wrap gap-2">
-                {state === "pending" && (
-                    <Button
-                        size="sm"
-                        className="gap-1.5"
-                        onClick={() => onUpdateState("in_progress")}
-                    >
-                        <Play className="h-3.5 w-3.5" />
-                        Start
-                    </Button>
-                )}
+export function TaskActions({
+    task,
+    isStarting,
+    isPushing,
+    onUpdateState,
+    onStartWork,
+    onCreatePr,
+    onRequestChanges,
+}: TaskActionsProps) {
+    const { state } = task;
 
-                {state === "in_progress" && (
-                    <>
+    return (
+        <div className="flex flex-wrap gap-2">
+            {/* Pending: Start Work */}
+            {state === "pending" && onStartWork && (
+                <Button
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={onStartWork}
+                    disabled={isStarting}
+                >
+                    {isStarting ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                        <Play className="h-3.5 w-3.5" />
+                    )}
+                    Start Work
+                </Button>
+            )}
+
+            {/* Review: Create PR, Request Changes, Approve */}
+            {state === "review" && (
+                <>
+                    {onCreatePr && !task.prUrl && (
                         <Button
                             size="sm"
                             className="gap-1.5"
-                            onClick={() => onUpdateState("review")}
+                            onClick={onCreatePr}
+                            disabled={isPushing}
                         >
-                            <GitPullRequest className="h-3.5 w-3.5" />
-                            Request Review
+                            {isPushing ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                                <GitPullRequest className="h-3.5 w-3.5" />
+                            )}
+                            Create PR
                         </Button>
+                    )}
+
+                    {task.prUrl && (
                         <Button
                             size="sm"
                             variant="outline"
                             className="gap-1.5"
-                            onClick={() => onUpdateState("done")}
+                            onClick={() => void openUrl(task.prUrl!)}
                         >
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            Mark Done
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            View PR
                         </Button>
-                    </>
-                )}
+                    )}
 
-                {state === "review" && (
+                    {onRequestChanges && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={onRequestChanges}
+                        >
+                            <MessageSquarePlus className="h-3.5 w-3.5" />
+                            Request Changes
+                        </Button>
+                    )}
+
                     <Button
                         size="sm"
+                        variant="outline"
                         className="gap-1.5"
                         onClick={() => onUpdateState("done")}
                     >
                         <CheckCircle2 className="h-3.5 w-3.5" />
-                        Mark Done
+                        Approve & Done
                     </Button>
-                )}
+                </>
+            )}
 
-                {state !== "done" && state !== "dismissed" && (
+            {/* Done: Reopen + View PR */}
+            {state === "done" && (
+                <>
+                    {task.prUrl && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => void openUrl(task.prUrl!)}
+                        >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            View PR
+                        </Button>
+                    )}
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        className="gap-1.5 text-muted-foreground"
+                        onClick={() => onUpdateState("pending")}
+                    >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Reopen
+                    </Button>
+                </>
+            )}
+
+            {/* Failed: Retry + error info */}
+            {state === "failed" && (
+                <>
+                    <Button
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => onUpdateState("pending")}
+                    >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Retry
+                    </Button>
+                    {task.lastError && (
+                        <div className="flex items-center gap-1.5 text-xs text-destructive">
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            <span className="truncate max-w-[300px]">
+                                {task.lastError}
+                            </span>
+                        </div>
+                    )}
+                </>
+            )}
+
+            {/* Dismiss (available for non-terminal states) */}
+            {state !== "done" &&
+                state !== "dismissed" &&
+                state !== "failed" &&
+                state !== "in_progress" && (
                     <Button
                         size="sm"
                         variant="ghost"
@@ -69,7 +171,6 @@ export function TaskActions({ state, onUpdateState }: TaskActionsProps) {
                         Dismiss
                     </Button>
                 )}
-            </div>
         </div>
     );
 }

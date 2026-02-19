@@ -12,6 +12,7 @@ import {
     createScannedTask,
     getDeduplicationContext,
     recoverStaleTasks,
+    updateTask as dbUpdateTask,
 } from "@core/db/tasks";
 import type {
     BudgetConfig,
@@ -193,6 +194,92 @@ export function useDeepScanListener(repositoryId: string | undefined) {
     }, [repositoryId, queryClient]);
 }
 
+// ── Task Event Listeners ─────────────────────────────────────
+
+/**
+ * Listens for agent task lifecycle events from the Rust backend.
+ * Provides real-time UI updates as phases change, and acts as a
+ * safety net for DB persistence (in case mutation callbacks fail).
+ */
+export function useTaskEventListeners(
+    taskId: string | undefined,
+    repositoryId: string | undefined,
+) {
+    const queryClient = useQueryClient();
+
+    useEffect(() => {
+        if (!taskId || !repositoryId) return;
+
+        const unlisteners: Promise<() => void>[] = [];
+
+        unlisteners.push(
+            listen<{ taskId: string; repositoryId: string }>(
+                "agent:task-started",
+                (event) => {
+                    if (event.payload.taskId !== taskId) return;
+                    console.log("[event] agent:task-started", event.payload);
+                    void queryClient.invalidateQueries({
+                        queryKey: ["engine-status"],
+                    });
+                    void queryClient.invalidateQueries({
+                        queryKey: ["task", taskId],
+                    });
+                },
+            ),
+        );
+
+        unlisteners.push(
+            listen<{
+                taskId: string;
+                repositoryId: string;
+                branchName: string | null;
+                commitSha: string | null;
+            }>("agent:task-completed", (event) => {
+                if (event.payload.taskId !== taskId) return;
+                console.log("[event] agent:task-completed", event.payload);
+                void queryClient.invalidateQueries({
+                    queryKey: ["task", taskId],
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ["tasks", repositoryId],
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ["engine-status"],
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ["budget-status"],
+                });
+            }),
+        );
+
+        unlisteners.push(
+            listen<{
+                taskId: string;
+                repositoryId: string;
+                error: string | null;
+            }>("agent:task-failed", (event) => {
+                if (event.payload.taskId !== taskId) return;
+                console.log("[event] agent:task-failed", event.payload);
+                void queryClient.invalidateQueries({
+                    queryKey: ["task", taskId],
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ["tasks", repositoryId],
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ["engine-status"],
+                });
+            }),
+        );
+
+        return () => {
+            for (const p of unlisteners) {
+                void p.then((fn) => fn());
+            }
+        };
+    }, [taskId, repositoryId, queryClient]);
+}
+
 // ── Working ─────────────────────────────────────────────────
 
 export function useStartTask() {
@@ -206,8 +293,49 @@ export function useStartTask() {
             taskTitle: string;
             taskDescription: string;
             filesInvolved: string[];
-        }) => invoke<WorkResult>("engine_start_task", params),
-        onSuccess: (_result, variables) => {
+        }) => {
+            console.log(
+                "[useStartTask] invoking engine_start_task command — taskId:",
+                params.taskId,
+            );
+            return invoke<WorkResult>("engine_start_task", params);
+        },
+        onSuccess: async (result, variables) => {
+            console.log("[useStartTask] onSuccess — result:", result);
+
+            // Persist WorkResult fields to the task in DB
+            try {
+                if (result.success) {
+                    console.log(
+                        "[useStartTask] persisting success — branch:",
+                        result.branchName,
+                        "sha:",
+                        result.commitSha,
+                    );
+                    await dbUpdateTask(variables.taskId, {
+                        state: "review" as const,
+                        branchName: result.branchName,
+                        commitSha: result.commitSha,
+                        completedAt: new Date().toISOString(),
+                    });
+                } else {
+                    console.log(
+                        "[useStartTask] persisting failure — error:",
+                        result.error,
+                    );
+                    await dbUpdateTask(variables.taskId, {
+                        state: "failed" as const,
+                        lastError: result.error ?? "Unknown error",
+                        branchName: result.branchName,
+                    });
+                }
+            } catch (e) {
+                console.error(
+                    "[useStartTask] failed to persist WorkResult to DB:",
+                    e,
+                );
+            }
+
             void queryClient.invalidateQueries({
                 queryKey: ["tasks", variables.repositoryId],
             });
@@ -219,6 +347,33 @@ export function useStartTask() {
             });
             void queryClient.invalidateQueries({
                 queryKey: ["budget-status"],
+            });
+        },
+        onError: async (error, variables) => {
+            console.error("[useStartTask] onError — mutation failed:", error);
+
+            // Task is stuck in in_progress — move to failed
+            try {
+                await dbUpdateTask(variables.taskId, {
+                    state: "failed" as const,
+                    lastError:
+                        error instanceof Error ? error.message : String(error),
+                });
+            } catch (e) {
+                console.error(
+                    "[useStartTask] failed to persist error state to DB:",
+                    e,
+                );
+            }
+
+            void queryClient.invalidateQueries({
+                queryKey: ["tasks", variables.repositoryId],
+            });
+            void queryClient.invalidateQueries({
+                queryKey: ["task", variables.taskId],
+            });
+            void queryClient.invalidateQueries({
+                queryKey: ["engine-status"],
             });
         },
     });
@@ -275,6 +430,48 @@ export function usePushBranch() {
                 repoPath,
                 branchName,
             }),
+    });
+}
+
+// ── Diff ────────────────────────────────────────────────────
+
+export interface DiffFileStat {
+    file: string;
+    additions: number;
+    deletions: number;
+}
+
+export function useDiffStat(
+    repoPath: string | undefined,
+    baseBranch: string | undefined,
+    headBranch: string | undefined,
+) {
+    return useQuery({
+        queryKey: ["diff-stat", repoPath, baseBranch, headBranch],
+        queryFn: () =>
+            invoke<DiffFileStat[]>("engine_get_diff_stat", {
+                repoPath,
+                baseBranch,
+                headBranch,
+            }),
+        enabled: !!repoPath && !!baseBranch && !!headBranch,
+    });
+}
+
+export function useDiff(
+    repoPath: string | undefined,
+    baseBranch: string | undefined,
+    headBranch: string | undefined,
+) {
+    return useQuery({
+        queryKey: ["diff", repoPath, baseBranch, headBranch],
+        queryFn: () =>
+            invoke<string>("engine_get_diff", {
+                repoPath,
+                baseBranch,
+                headBranch,
+            }),
+        enabled: !!repoPath && !!baseBranch && !!headBranch,
     });
 }
 

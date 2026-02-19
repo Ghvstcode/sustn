@@ -178,5 +178,22 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "create task_messages table for chat interface",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS task_messages (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    content TEXT NOT NULL,
+                    metadata TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX idx_task_messages_task_id ON task_messages(task_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -8,6 +8,8 @@ import type {
     TaskSource,
     EstimatedEffort,
     TaskEvent,
+    TaskMessage,
+    MessageRole,
 } from "@core/types/task";
 
 interface TaskRow {
@@ -45,6 +47,15 @@ interface TaskEventRow {
     old_value: string | null;
     new_value: string | null;
     comment: string | null;
+    created_at: string;
+}
+
+interface TaskMessageRow {
+    id: string;
+    task_id: string;
+    role: string;
+    content: string;
+    metadata: string | null;
     created_at: string;
 }
 
@@ -225,6 +236,12 @@ export async function updateTask(
             | "notes"
             | "prUrl"
             | "category"
+            | "branchName"
+            | "commitSha"
+            | "lastError"
+            | "startedAt"
+            | "completedAt"
+            | "filesInvolved"
         >
     >,
 ): Promise<Task> {
@@ -268,6 +285,30 @@ export async function updateTask(
     if (fields.category !== undefined) {
         setClauses.push(`category = $${paramIndex++}`);
         values.push(fields.category);
+    }
+    if (fields.branchName !== undefined) {
+        setClauses.push(`branch_name = $${paramIndex++}`);
+        values.push(fields.branchName);
+    }
+    if (fields.commitSha !== undefined) {
+        setClauses.push(`commit_sha = $${paramIndex++}`);
+        values.push(fields.commitSha);
+    }
+    if (fields.lastError !== undefined) {
+        setClauses.push(`last_error = $${paramIndex++}`);
+        values.push(fields.lastError);
+    }
+    if (fields.startedAt !== undefined) {
+        setClauses.push(`started_at = $${paramIndex++}`);
+        values.push(fields.startedAt);
+    }
+    if (fields.completedAt !== undefined) {
+        setClauses.push(`completed_at = $${paramIndex++}`);
+        values.push(fields.completedAt);
+    }
+    if (fields.filesInvolved !== undefined) {
+        setClauses.push(`files_involved = $${paramIndex++}`);
+        values.push(JSON.stringify(fields.filesInvolved));
     }
 
     setClauses.push(`updated_at = CURRENT_TIMESTAMP`);
@@ -342,6 +383,71 @@ export async function listTaskEvents(taskId: string): Promise<TaskEvent[]> {
         [taskId],
     );
     return rows.map(rowToTaskEvent);
+}
+
+// ── Task Messages (Chat) ────────────────────────────────────
+
+function rowToTaskMessage(row: TaskMessageRow): TaskMessage {
+    let metadata: Record<string, unknown> | undefined;
+    if (row.metadata) {
+        try {
+            metadata = JSON.parse(row.metadata) as Record<string, unknown>;
+        } catch {
+            metadata = undefined;
+        }
+    }
+    return {
+        id: row.id,
+        taskId: row.task_id,
+        role: row.role as MessageRole,
+        content: row.content,
+        metadata,
+        createdAt: row.created_at,
+    };
+}
+
+export async function createMessage(
+    taskId: string,
+    role: MessageRole,
+    content: string,
+    metadata?: Record<string, unknown>,
+): Promise<TaskMessage> {
+    const db = await getDb();
+    const id = await invoke<string>("generate_task_id");
+    await db.execute(
+        "INSERT INTO task_messages (id, task_id, role, content, metadata) VALUES ($1, $2, $3, $4, $5)",
+        [id, taskId, role, content, metadata ? JSON.stringify(metadata) : null],
+    );
+    const rows = await db.select<TaskMessageRow[]>(
+        "SELECT * FROM task_messages WHERE id = $1",
+        [id],
+    );
+    return rowToTaskMessage(rows[0]);
+}
+
+export async function listMessages(taskId: string): Promise<TaskMessage[]> {
+    const db = await getDb();
+    const rows = await db.select<TaskMessageRow[]>(
+        "SELECT * FROM task_messages WHERE task_id = $1 ORDER BY created_at ASC",
+        [taskId],
+    );
+    return rows.map(rowToTaskMessage);
+}
+
+export async function getMessagesForPrompt(taskId: string): Promise<string> {
+    const messages = await listMessages(taskId);
+    if (messages.length === 0) return "";
+    return messages
+        .map((m) => {
+            const label =
+                m.role === "user"
+                    ? "User"
+                    : m.role === "agent"
+                      ? "Agent"
+                      : "System";
+            return `[${label}] ${m.content}`;
+        })
+        .join("\n");
 }
 
 // ── Agent Engine Helpers ────────────────────────────────────

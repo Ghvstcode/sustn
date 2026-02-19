@@ -57,3 +57,14 @@ export interface TaskEvent {
     comment: string | undefined;
     createdAt: string;
 }
+
+export type MessageRole = "user" | "agent" | "system";
+
+export interface TaskMessage {
+    id: string;
+    taskId: string;
+    role: MessageRole;
+    content: string;
+    metadata: Record<string, unknown> | undefined;
+    createdAt: string;
+}

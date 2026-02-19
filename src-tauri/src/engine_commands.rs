@@ -137,10 +137,13 @@ pub async fn engine_start_task(
     task_description: String,
     files_involved: Vec<String>,
 ) -> Result<worker::WorkResult, String> {
+    println!("[engine_start_task] invoked — task_id={task_id}, repo_path={repo_path}, title={task_title}");
+
     // Check if a task is already running
     {
         let current = state.current_task.lock().await;
         if current.is_some() {
+            println!("[engine_start_task] BLOCKED — another task already in progress");
             return Err("Another task is already in progress".to_string());
         }
     }
@@ -155,6 +158,7 @@ pub async fn engine_start_task(
             started_at: chrono::Local::now().to_rfc3339(),
         });
     }
+    println!("[engine_start_task] current_task set — emitting agent:task-started");
 
     // Emit task-started event
     let _ = app.emit("agent:task-started", serde_json::json!({
@@ -163,6 +167,7 @@ pub async fn engine_start_task(
     }));
 
     // Execute the task
+    println!("[engine_start_task] calling worker::execute_task — max_retries=2");
     let result = worker::execute_task(
         &repo_path,
         &task_id,
@@ -173,6 +178,11 @@ pub async fn engine_start_task(
     )
     .await;
 
+    println!(
+        "[engine_start_task] worker finished — success={}, phase={:?}, branch={:?}, sha={:?}, error={:?}",
+        result.success, result.phase_reached, result.branch_name, result.commit_sha, result.error
+    );
+
     // Clear current task
     {
         let mut current = state.current_task.lock().await;
@@ -181,6 +191,7 @@ pub async fn engine_start_task(
 
     // Emit completion event
     if result.success {
+        println!("[engine_start_task] emitting agent:task-completed — branch={:?}", result.branch_name);
         let _ = app.emit("agent:task-completed", serde_json::json!({
             "taskId": task_id,
             "repositoryId": repository_id,
@@ -188,6 +199,7 @@ pub async fn engine_start_task(
             "commitSha": result.commit_sha,
         }));
     } else {
+        println!("[engine_start_task] emitting agent:task-failed — error={:?}", result.error);
         let _ = app.emit("agent:task-failed", serde_json::json!({
             "taskId": task_id,
             "repositoryId": repository_id,
@@ -274,6 +286,31 @@ pub async fn engine_list_branches(
     repo_path: String,
 ) -> Result<Vec<engine::git::BranchInfo>, String> {
     Ok(engine::git::list_branches(&repo_path))
+}
+
+/// Get unified diff between two branches.
+#[tauri::command]
+pub async fn engine_get_diff(
+    repo_path: String,
+    base_branch: String,
+    head_branch: String,
+) -> Result<String, String> {
+    let result = engine::git::diff_branches(&repo_path, &base_branch, &head_branch);
+    if result.success {
+        Ok(result.output)
+    } else {
+        Err(result.error.unwrap_or_else(|| "Failed to get diff".to_string()))
+    }
+}
+
+/// Get diff file statistics between two branches.
+#[tauri::command]
+pub async fn engine_get_diff_stat(
+    repo_path: String,
+    base_branch: String,
+    head_branch: String,
+) -> Result<Vec<engine::git::DiffFileStat>, String> {
+    Ok(engine::git::diff_stat(&repo_path, &base_branch, &head_branch))
 }
 
 #[derive(Debug, Serialize, Deserialize)]

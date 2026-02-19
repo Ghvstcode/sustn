@@ -77,6 +77,11 @@ pub async fn invoke_claude_cli(
         stdin_content.map_or(0, |s| s.len()),
         max_turns,
     );
+    println!("[engine] ┌─── PROMPT ───────────────────────────────────────");
+    for line in prompt.lines() {
+        println!("[engine] │ {line}");
+    }
+    println!("[engine] └─────────────────────────────────────────────────");
 
     let has_stdin = stdin_content.is_some();
 
@@ -156,11 +161,17 @@ pub async fn invoke_claude_cli(
                     stdout.len(),
                     stderr.len()
                 );
+                println!("[engine] ┌─── STDOUT ──────────────────────────────────────");
+                for line in stdout.lines() {
+                    println!("[engine] │ {line}");
+                }
+                println!("[engine] └─────────────────────────────────────────────────");
                 if !stderr.is_empty() {
-                    println!(
-                        "[engine] claude CLI stderr: {}",
-                        &stderr[..stderr.len().min(500)]
-                    );
+                    println!("[engine] ┌─── STDERR ──────────────────────────────────────");
+                    for line in stderr.lines() {
+                        println!("[engine] │ {line}");
+                    }
+                    println!("[engine] └─────────────────────────────────────────────────");
                 }
                 Ok(CliResult {
                     success: status.success(),
@@ -200,11 +211,17 @@ pub async fn invoke_claude_cli(
                     stdout.len(),
                     stderr.len()
                 );
+                println!("[engine] ┌─── STDOUT ──────────────────────────────────────");
+                for line in stdout.lines() {
+                    println!("[engine] │ {line}");
+                }
+                println!("[engine] └─────────────────────────────────────────────────");
                 if !stderr.is_empty() {
-                    println!(
-                        "[engine] claude CLI stderr: {}",
-                        &stderr[..stderr.len().min(500)]
-                    );
+                    println!("[engine] ┌─── STDERR ──────────────────────────────────────");
+                    for line in stderr.lines() {
+                        println!("[engine] │ {line}");
+                    }
+                    println!("[engine] └─────────────────────────────────────────────────");
                 }
                 Ok(CliResult {
                     success: output.status.success(),

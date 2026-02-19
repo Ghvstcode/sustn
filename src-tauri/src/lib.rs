@@ -51,6 +51,8 @@ pub fn run() {
             engine_commands::engine_check_schedule,
             engine_commands::engine_push_branch,
             engine_commands::engine_list_branches,
+            engine_commands::engine_get_diff,
+            engine_commands::engine_get_diff_stat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
