@@ -42,6 +42,8 @@ pub fn run() {
             repository::clone_repository,
             repository::git_pull,
             repository::get_default_clone_dir,
+            repository::list_directory,
+            repository::read_file_content,
             engine_commands::engine_get_budget,
             engine_commands::engine_scan_now,
             engine_commands::engine_start_task,

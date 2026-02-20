@@ -38,15 +38,25 @@ import { TaskDiffViewer } from "./TaskDiffViewer";
 import { TaskChangedFilesSidebar } from "./TaskChangedFilesSidebar";
 import { TaskFilesInvolved } from "./TaskFilesInvolved";
 import { TaskStatusBanner } from "./TaskStatusBanner";
+import { FileContentViewer } from "./FileContentViewer";
 
 // ── Constants ───────────────────────────────────────────────
 
 const btnClass =
     "group h-7 gap-1.5 text-xs whitespace-nowrap transition-all duration-200 hover:-translate-y-px hover:shadow-sm active:translate-y-0 active:shadow-none";
 
-const SIDEBAR_MIN = 300;
+const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 500;
-const SIDEBAR_DEFAULT = 300;
+const SIDEBAR_DEFAULT = 280;
+
+// ── Types ───────────────────────────────────────────────────
+
+type TabKind = "diff" | "file";
+
+interface FileTab {
+    path: string;
+    kind: TabKind;
+}
 
 // ── Helpers ─────────────────────────────────────────────────
 
@@ -148,8 +158,8 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     const sendMessage = useSendMessage();
     const setSelectedTask = useAppStore((s) => s.setSelectedTask);
 
-    // ── Tab state ──
-    const [openTabs, setOpenTabs] = useState<string[]>([]);
+    // ── Tab state (typed) ──
+    const [openTabs, setOpenTabs] = useState<FileTab[]>([]);
     const [activeTab, setActiveTab] = useState("overview");
 
     // ── Sidebar resize ──
@@ -188,8 +198,15 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     );
 
     const isReadOnly = task?.state === "done" || task?.state === "dismissed";
-    const hasChanges = showDiff && diffStat && diffStat.length > 0;
-    const isShowingDiff = activeTab !== "overview" && hasChanges;
+    const hasChanges = !!(showDiff && diffStat && diffStat.length > 0);
+    const showSidebar = !!repoPath;
+
+    // Look up the active tab's kind
+    const activeFileTab = openTabs.find((t) => t.path === activeTab);
+    const isShowingDiff =
+        activeTab !== "overview" && activeFileTab?.kind === "diff";
+    const isShowingFile =
+        activeTab !== "overview" && activeFileTab?.kind === "file";
 
     // ── Sidebar resize handlers ──
 
@@ -303,14 +320,28 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
         }
     }
 
-    function handleFileSelect(file: string) {
-        setOpenTabs((prev) => (prev.includes(file) ? prev : [...prev, file]));
-        setActiveTab(file);
+    // ── Tab handlers ──
+
+    function openTab(path: string, kind: TabKind) {
+        setOpenTabs((prev) => {
+            // If a tab for this path already exists (any kind), just activate it
+            if (prev.find((t) => t.path === path)) return prev;
+            return [...prev, { path, kind }];
+        });
+        setActiveTab(path);
     }
 
-    function handleCloseTab(file: string) {
-        setOpenTabs((prev) => prev.filter((f) => f !== file));
-        if (activeTab === file) setActiveTab("overview");
+    function handleDiffFileSelect(file: string) {
+        openTab(file, "diff");
+    }
+
+    function handleBrowseFileSelect(file: string) {
+        openTab(file, "file");
+    }
+
+    function handleCloseTab(path: string) {
+        setOpenTabs((prev) => prev.filter((t) => t.path !== path));
+        if (activeTab === path) setActiveTab("overview");
     }
 
     // ── Build primary action for header ──
@@ -443,6 +474,10 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
         );
     }
 
+    // ── Determine content to show ──
+
+    const showTabBar = openTabs.length > 0 || hasChanges;
+
     return (
         <div className="flex h-full">
             {/* ── Left: content column ── */}
@@ -458,7 +493,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                 />
 
                 {/* Tab bar */}
-                {hasChanges && (
+                {showTabBar && (
                     <div className="flex items-center h-9 border-b border-border shrink-0 px-1">
                         <button
                             type="button"
@@ -476,11 +511,11 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                             )}
                         </button>
 
-                        {openTabs.map((file) => {
-                            const isActive = activeTab === file;
+                        {openTabs.map((tab) => {
+                            const isActive = activeTab === tab.path;
                             return (
                                 <div
-                                    key={file}
+                                    key={tab.path}
                                     className={`group relative flex items-center h-full shrink-0 ${
                                         isActive
                                             ? "text-foreground"
@@ -489,20 +524,23 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                 >
                                     <button
                                         type="button"
-                                        onClick={() => setActiveTab(file)}
-                                        className="flex items-center px-3 h-full text-xs"
+                                        onClick={() => setActiveTab(tab.path)}
+                                        className="flex items-center gap-1.5 px-3 h-full text-xs"
                                     >
+                                        {tab.kind === "diff" && (
+                                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500/60 shrink-0" />
+                                        )}
                                         <span
                                             className={`truncate max-w-[140px] font-mono ${isActive ? "font-medium" : ""}`}
                                         >
-                                            {getFileName(file)}
+                                            {getFileName(tab.path)}
                                         </span>
                                     </button>
                                     <button
                                         type="button"
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            handleCloseTab(file);
+                                            handleCloseTab(tab.path);
                                         }}
                                         className={`mr-1.5 rounded p-0.5 transition-opacity hover:bg-muted ${
                                             isActive
@@ -538,6 +576,13 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                 </p>
                             </div>
                         )
+                    ) : isShowingFile && repoPath ? (
+                        <div className="px-6 pt-4 pb-8">
+                            <FileContentViewer
+                                repoPath={repoPath}
+                                relativePath={activeTab}
+                            />
+                        </div>
                     ) : (
                         <div className="mx-auto w-full max-w-2xl px-6 pt-6 pb-8">
                             {task.state === "in_progress" && (
@@ -583,7 +628,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                     <div className="shrink-0 bg-background px-6 py-3">
                         <div
                             className={
-                                isShowingDiff
+                                isShowingDiff || isShowingFile
                                     ? "w-full"
                                     : "mx-auto w-full max-w-2xl"
                             }
@@ -602,7 +647,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
             </div>
 
             {/* ── Resize handle (true full height) ── */}
-            {hasChanges && (
+            {showSidebar && (
                 <div
                     onMouseDown={handleResizeStart}
                     className="relative z-10 w-0 cursor-col-resize before:absolute before:-left-1 before:top-0 before:h-full before:w-2 before:content-[''] hover:before:bg-ring/20 active:before:bg-ring/30"
@@ -610,18 +655,21 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
             )}
 
             {/* ── Right: sidebar (true full height) ── */}
-            {hasChanges && (
+            {showSidebar && (
                 <div
                     className="shrink-0 h-full"
                     style={{ width: sidebarWidth }}
                 >
                     <TaskChangedFilesSidebar
-                        files={diffStat}
+                        repoPath={repoPath}
+                        files={diffStat ?? []}
                         activeFile={
                             activeTab !== "overview" ? activeTab : undefined
                         }
-                        onFileSelect={handleFileSelect}
+                        onDiffFileSelect={handleDiffFileSelect}
+                        onBrowseFileSelect={handleBrowseFileSelect}
                         actions={sidebarActions}
+                        hasChanges={hasChanges}
                     />
                 </div>
             )}
