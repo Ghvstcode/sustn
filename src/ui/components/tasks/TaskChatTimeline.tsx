@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import {
     ArrowRight,
     MessageSquare,
+    MessageSquarePlus,
     Pencil,
     Plus,
     FileText,
@@ -147,51 +148,58 @@ function SystemEvent({ event }: { event: TaskEvent }) {
     );
 }
 
-// ── Chat message bubble ────────────────────────────────────
+// ── Chat message (Linear-style comment) ─────────────────────
 
-function ChatBubble({ message }: { message: TaskMessage }) {
+function ChatMessage({ message }: { message: TaskMessage }) {
     const isUser = message.role === "user";
     const isAgent = message.role === "agent";
+    const isChangeRequest = message.metadata?.type === "change_request";
+
+    const authorLabel = isUser ? "You" : isAgent ? "Agent" : "System";
 
     return (
         <div
-            className={`flex gap-2.5 py-1.5 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+            className={`flex gap-2.5 py-2 ${
+                isChangeRequest
+                    ? "rounded-lg border border-amber-500/20 bg-amber-500/[0.04] px-2.5 py-2.5"
+                    : ""
+            }`}
         >
             <div
-                className={`flex h-6 w-6 items-center justify-center rounded-full shrink-0 ${
-                    isAgent
-                        ? "bg-primary/10 text-primary"
-                        : isUser
-                          ? "bg-foreground/10 text-foreground/70"
-                          : "bg-muted text-muted-foreground"
+                className={`flex h-5 w-5 items-center justify-center rounded-full shrink-0 mt-0.5 ${
+                    isChangeRequest
+                        ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                        : isAgent
+                          ? "bg-primary/10 text-primary"
+                          : isUser
+                            ? "bg-foreground/8 text-foreground/60"
+                            : "bg-muted text-muted-foreground"
                 }`}
             >
-                {isAgent ? (
+                {isChangeRequest ? (
+                    <MessageSquarePlus className="h-3 w-3" />
+                ) : isAgent ? (
                     <Bot className="h-3 w-3" />
                 ) : (
                     <User className="h-3 w-3" />
                 )}
             </div>
-            <div
-                className={`max-w-[80%] rounded-xl px-3.5 py-2.5 ${
-                    isUser
-                        ? "bg-foreground text-background"
-                        : isAgent
-                          ? "bg-muted/70"
-                          : "bg-muted/40"
-                }`}
-            >
-                <p className="text-sm leading-relaxed whitespace-pre-wrap">
+            <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-2">
+                    <span className="text-xs font-medium text-foreground/80">
+                        {authorLabel}
+                    </span>
+                    {isChangeRequest && (
+                        <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                            requested changes
+                        </span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground/40">
+                        {formatRelativeTime(message.createdAt)}
+                    </span>
+                </div>
+                <p className="mt-0.5 text-sm leading-relaxed text-foreground/70 whitespace-pre-wrap">
                     {message.content}
-                </p>
-                <p
-                    className={`text-[10px] mt-1.5 ${
-                        isUser
-                            ? "text-background/40"
-                            : "text-muted-foreground/40"
-                    }`}
-                >
-                    {formatRelativeTime(message.createdAt)}
                 </p>
             </div>
         </div>
@@ -231,7 +239,7 @@ export function TaskChatTimeline({ taskId }: TaskChatTimelineProps) {
     }, [events, messages]);
 
     return (
-        <div className="space-y-0.5">
+        <div className="space-y-1">
             {timeline.length === 0 && (
                 <p className="text-xs text-muted-foreground/40 py-2">
                     No activity yet
@@ -247,7 +255,10 @@ export function TaskChatTimeline({ taskId }: TaskChatTimelineProps) {
                     );
                 }
                 return (
-                    <ChatBubble key={`m-${item.data.id}`} message={item.data} />
+                    <ChatMessage
+                        key={`m-${item.data.id}`}
+                        message={item.data}
+                    />
                 );
             })}
         </div>

@@ -76,29 +76,19 @@ export function TaskDetailHeader({
         app: "vscode" | "cursor" | "terminal" | "finder",
     ) {
         if (!repoPath) return;
+        const appNames: Record<string, string> = {
+            vscode: "Visual Studio Code",
+            cursor: "Cursor",
+            terminal: "Terminal",
+        };
         try {
-            switch (app) {
-                case "vscode":
-                    await invoke("plugin:shell|execute", {
-                        program: "code",
-                        args: [repoPath],
-                    });
-                    break;
-                case "cursor":
-                    await invoke("plugin:shell|execute", {
-                        program: "cursor",
-                        args: [repoPath],
-                    });
-                    break;
-                case "terminal":
-                    await invoke("plugin:shell|execute", {
-                        program: "open",
-                        args: ["-a", "Terminal", repoPath],
-                    });
-                    break;
-                case "finder":
-                    await openPath(repoPath);
-                    break;
+            if (app === "finder") {
+                await openPath(repoPath);
+            } else {
+                await invoke("open_in_app", {
+                    path: repoPath,
+                    app: appNames[app],
+                });
             }
         } catch (err) {
             console.error(`Failed to open in ${app}:`, err);

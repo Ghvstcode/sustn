@@ -31,6 +31,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             command::greet,
+            command::open_in_app,
             auth::generate_auth_id,
             preflight::check_git_installed,
             preflight::check_claude_installed,
@@ -48,8 +49,6 @@ pub fn run() {
             engine_commands::engine_scan_now,
             engine_commands::engine_start_task,
             engine_commands::engine_get_status,
-            engine_commands::engine_pause,
-            engine_commands::engine_resume,
             engine_commands::engine_check_schedule,
             engine_commands::engine_push_branch,
             engine_commands::engine_list_branches,

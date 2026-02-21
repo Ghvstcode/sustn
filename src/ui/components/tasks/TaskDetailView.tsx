@@ -47,7 +47,7 @@ const btnClass =
 
 const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 500;
-const SIDEBAR_DEFAULT = 280;
+const SIDEBAR_DEFAULT = 350;
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -69,17 +69,41 @@ function getFileName(path: string): string {
 function ChatInput({
     taskId,
     placeholder,
+    feedbackMode,
+    onFeedbackSend,
+    onFeedbackCancel,
 }: {
     taskId: string;
     placeholder?: string;
+    feedbackMode?: boolean;
+    onFeedbackSend?: (content: string) => void;
+    onFeedbackCancel?: () => void;
 }) {
     const [draft, setDraft] = useState("");
+    const [isFocused, setIsFocused] = useState(false);
     const sendMessage = useSendMessage();
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // Auto-focus when feedback mode activates
+    useEffect(() => {
+        if (feedbackMode && textareaRef.current) {
+            textareaRef.current.focus();
+        }
+    }, [feedbackMode]);
 
     function handleSend() {
         const trimmed = draft.trim();
         if (!trimmed) return;
+
+        if (feedbackMode && onFeedbackSend) {
+            onFeedbackSend(trimmed);
+            setDraft("");
+            if (textareaRef.current) {
+                textareaRef.current.style.height = "auto";
+            }
+            return;
+        }
+
         sendMessage.mutate(
             { taskId, role: "user", content: trimmed },
             {
@@ -98,6 +122,10 @@ function ChatInput({
             e.preventDefault();
             handleSend();
         }
+        if (e.key === "Escape" && feedbackMode && onFeedbackCancel) {
+            e.preventDefault();
+            onFeedbackCancel();
+        }
     }
 
     function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
@@ -110,32 +138,98 @@ function ChatInput({
     const hasContent = draft.trim().length > 0;
 
     return (
-        <div className="overflow-hidden rounded-xl border border-border bg-muted/30 focus-within:ring-1 focus-within:ring-ring focus-within:border-ring focus-within:bg-background transition-all">
+        <div
+            className={`relative overflow-hidden rounded-2xl border transition-all duration-500 ease-out ${
+                feedbackMode
+                    ? "border-dashed border-amber-500/50 bg-amber-50/[0.03] shadow-[0_0_0_1px_hsl(40_100%_50%/0.15),0_0_16px_-4px_hsl(40_100%_50%/0.1)]"
+                    : isFocused
+                      ? "border-ring/50 bg-background shadow-[0_0_0_1px_hsl(var(--ring)/0.2),0_0_24px_-4px_hsl(var(--ring)/0.14),0_2px_6px_-2px_hsl(var(--foreground)/0.04)]"
+                      : "border-ring/30 bg-background shadow-[0_0_0_1px_hsl(var(--ring)/0.08),0_0_12px_-4px_hsl(var(--ring)/0.06)]"
+            }`}
+        >
+            {/* Shimmer accent line — always alive */}
+            {!feedbackMode && (
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-px overflow-hidden">
+                    <div className="h-full w-1/4 bg-gradient-to-r from-transparent via-foreground/[0.06] to-transparent animate-input-shimmer" />
+                </div>
+            )}
+
+            {/* Feedback mode banner */}
+            {feedbackMode && (
+                <div className="flex items-center justify-between gap-2 border-b border-dashed border-amber-500/20 bg-amber-500/[0.04] px-4 py-2">
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                        Describe what needs to change — the agent will redo this
+                        task with your feedback.
+                    </p>
+                    <button
+                        type="button"
+                        onClick={onFeedbackCancel}
+                        className="shrink-0 rounded p-0.5 text-amber-600/60 hover:text-amber-600 dark:text-amber-400/60 dark:hover:text-amber-400 transition-colors"
+                    >
+                        <X className="h-3.5 w-3.5" />
+                    </button>
+                </div>
+            )}
+
             <textarea
                 ref={textareaRef}
                 value={draft}
                 onChange={handleChange}
                 onKeyDown={handleKeyDown}
-                placeholder={placeholder ?? "Add context for the agent..."}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+                placeholder={
+                    feedbackMode
+                        ? "What should the agent change?"
+                        : (placeholder ?? "Add context for the agent...")
+                }
                 rows={1}
-                className="w-full resize-none bg-transparent px-4 pt-3 pb-1.5 text-sm leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none"
-                style={{ minHeight: "40px", maxHeight: "120px" }}
+                className="w-full resize-none bg-transparent px-4 pt-3.5 pb-1.5 text-sm leading-relaxed placeholder:text-muted-foreground/35 focus:outline-none"
+                style={{ minHeight: "42px", maxHeight: "120px" }}
             />
-            <div className="flex items-center justify-between px-3 pb-2.5">
-                <span className="text-[11px] text-muted-foreground/25 select-none">
-                    ↵ to send
-                </span>
+
+            <div className="flex items-center justify-between px-3 pb-3">
+                {/* Keyboard hint — always visible */}
+                <div className="flex items-center gap-1.5">
+                    <kbd className="inline-flex h-[18px] items-center rounded border border-border/40 bg-muted/50 px-1 font-mono text-[10px] text-muted-foreground/40 leading-none">
+                        ↵
+                    </kbd>
+                    <span className="text-[10px] text-muted-foreground/30 select-none">
+                        to send
+                    </span>
+                    {feedbackMode && (
+                        <>
+                            <span className="text-[10px] text-muted-foreground/20 select-none mx-0.5">
+                                |
+                            </span>
+                            <kbd className="inline-flex h-[18px] items-center rounded border border-border/40 bg-muted/50 px-1 font-mono text-[10px] text-muted-foreground/40 leading-none">
+                                esc
+                            </kbd>
+                            <span className="text-[10px] text-muted-foreground/30 select-none">
+                                to cancel
+                            </span>
+                        </>
+                    )}
+                </div>
+
+                {/* Send button — morphs in when content exists */}
                 <button
                     type="button"
                     onClick={handleSend}
                     disabled={!hasContent || sendMessage.isPending}
-                    className={`flex h-6 w-6 items-center justify-center rounded-lg transition-all duration-200 ${
+                    className={`flex h-7 w-7 items-center justify-center rounded-lg transition-all duration-300 ease-out ${
                         hasContent
-                            ? "bg-foreground text-background shadow-sm hover:bg-foreground/90"
-                            : "bg-transparent text-muted-foreground/20"
+                            ? "bg-foreground text-background shadow-[0_1px_4px_hsl(var(--foreground)/0.2)] hover:scale-105 hover:shadow-[0_2px_8px_hsl(var(--foreground)/0.25)] active:scale-95 active:shadow-none"
+                            : "bg-foreground/10 text-muted-foreground/60"
                     }`}
                 >
-                    <ArrowUp className="h-3.5 w-3.5" />
+                    {sendMessage.isPending ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                        <ArrowUp
+                            className={`h-3.5 w-3.5 transition-transform duration-300 ${hasContent ? "translate-y-0" : "translate-y-0.5"}`}
+                        />
+                    )}
                 </button>
             </div>
         </div>
@@ -162,6 +256,9 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     const [openTabs, setOpenTabs] = useState<FileTab[]>([]);
     const [activeTab, setActiveTab] = useState("overview");
 
+    // ── Feedback mode (Request Changes flow) ──
+    const [feedbackMode, setFeedbackMode] = useState(false);
+
     // ── Sidebar resize ──
     const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
     const isDraggingSidebar = useRef(false);
@@ -171,7 +268,15 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     useEffect(() => {
         setOpenTabs([]);
         setActiveTab("overview");
+        setFeedbackMode(false);
     }, [taskId]);
+
+    // Auto-cancel feedback mode if task leaves "review" state
+    useEffect(() => {
+        if (task?.state !== "review") {
+            setFeedbackMode(false);
+        }
+    }, [task?.state]);
 
     // Listen for real-time task lifecycle events from the Rust backend
     useTaskEventListeners(taskId, task?.repositoryId);
@@ -199,7 +304,11 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
 
     const isReadOnly = task?.state === "done" || task?.state === "dismissed";
     const hasChanges = !!(showDiff && diffStat && diffStat.length > 0);
-    const showSidebar = !!repoPath;
+    const showSidebar =
+        !!repoPath &&
+        (task?.state === "in_progress" ||
+            task?.state === "review" ||
+            task?.state === "done");
 
     // Look up the active tab's kind
     const activeFileTab = openTabs.find((t) => t.path === activeTab);
@@ -249,13 +358,26 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     // ── Callbacks ──
 
     const handleRequestChanges = useCallback(() => {
-        updateTask.mutate({ id: taskId, state: "pending" as TaskState });
-        sendMessage.mutate({
-            taskId,
-            role: "system",
-            content: "User requested changes — task moved back to pending.",
-        });
-    }, [taskId, updateTask, sendMessage]);
+        setFeedbackMode(true);
+    }, []);
+
+    const handleFeedbackSend = useCallback(
+        (content: string) => {
+            sendMessage.mutate({
+                taskId,
+                role: "user",
+                content,
+                metadata: { type: "change_request" },
+            });
+            updateTask.mutate({ id: taskId, state: "pending" as TaskState });
+            setFeedbackMode(false);
+        },
+        [taskId, sendMessage, updateTask],
+    );
+
+    const handleFeedbackCancel = useCallback(() => {
+        setFeedbackMode(false);
+    }, []);
 
     if (isLoading || !task) {
         return (
@@ -640,6 +762,9 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                         ? "Leave feedback on the changes..."
                                         : "Add context for the agent..."
                                 }
+                                feedbackMode={feedbackMode}
+                                onFeedbackSend={handleFeedbackSend}
+                                onFeedbackCancel={handleFeedbackCancel}
                             />
                         </div>
                     </div>

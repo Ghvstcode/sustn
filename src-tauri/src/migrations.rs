@@ -195,5 +195,13 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 10,
+            description: "add unique index on repository path",
+            sql: r#"
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_repositories_path ON repositories(path);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

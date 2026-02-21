@@ -23,7 +23,7 @@ import { useRepositories } from "@core/api/useRepositories";
 import { useScanNow } from "@core/api/useEngine";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "@core/store/app-store";
-import type { TaskCategory } from "@core/types/task";
+import type { TaskCategory, EstimatedEffort } from "@core/types/task";
 import { TaskListHeader } from "./TaskListHeader";
 import { TaskRow } from "./TaskRow";
 import { AddTaskDialog } from "./AddTaskDialog";
@@ -173,6 +173,7 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
         title: string;
         description?: string;
         category: TaskCategory;
+        estimatedEffort?: EstimatedEffort;
     }) {
         const maxSortOrder =
             tasks && tasks.length > 0
@@ -185,6 +186,7 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
                 title: task.title,
                 description: task.description,
                 category: task.category,
+                estimatedEffort: task.estimatedEffort,
                 sortOrder: maxSortOrder + 1,
                 baseBranch: defaultBranch,
             },

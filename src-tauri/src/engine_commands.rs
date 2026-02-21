@@ -224,27 +224,6 @@ pub async fn engine_get_status(
     })
 }
 
-/// Pause the agent for a specific project (or globally if no repo_id).
-#[tauri::command]
-pub async fn engine_pause(
-    _state: State<'_, Arc<EngineState>>,
-    _repository_id: Option<String>,
-) -> Result<(), String> {
-    // TODO: Update agent_config.enabled = 0 in DB for the given repo
-    // For now this is a placeholder
-    Ok(())
-}
-
-/// Resume the agent for a specific project.
-#[tauri::command]
-pub async fn engine_resume(
-    _state: State<'_, Arc<EngineState>>,
-    _repository_id: Option<String>,
-) -> Result<(), String> {
-    // TODO: Update agent_config.enabled = 1 in DB for the given repo
-    Ok(())
-}
-
 /// Check if work is allowed for a project given its schedule config.
 #[tauri::command]
 pub fn engine_check_schedule(

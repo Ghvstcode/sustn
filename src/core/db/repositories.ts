@@ -48,6 +48,15 @@ export async function addRepository(
     name: string,
 ): Promise<Repository> {
     const db = await getDb();
+
+    const existing = await db.select<{ id: string }[]>(
+        "SELECT id FROM repositories WHERE path = $1 LIMIT 1",
+        [path],
+    );
+    if (existing.length > 0) {
+        throw new Error("This project has already been added");
+    }
+
     const id = await invoke<string>("generate_repo_id");
 
     await db.execute(

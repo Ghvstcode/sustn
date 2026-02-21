@@ -133,3 +133,37 @@ body {
 .animate-banner-shimmer {
     animation: banner-shimmer 3s ease-in-out infinite;
 }
+
+/* Premium chat input */
+@keyframes input-shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(400%);
+    }
+}
+
+@keyframes input-breathe {
+    0%,
+    100% {
+        box-shadow:
+            0 0 0 1px hsl(var(--ring) / 0.12),
+            0 0 15px -3px hsl(var(--ring) / 0.06),
+            0 1px 3px 0 hsl(var(--foreground) / 0.02);
+    }
+    50% {
+        box-shadow:
+            0 0 0 1px hsl(var(--ring) / 0.28),
+            0 0 24px -3px hsl(var(--ring) / 0.12),
+            0 1px 3px 0 hsl(var(--foreground) / 0.02);
+    }
+}
+
+.animate-input-shimmer {
+    animation: input-shimmer 3.5s ease-in-out infinite;
+}
+
+.animate-input-breathe {
+    animation: input-breathe 3s ease-in-out infinite;
+}

@@ -2,13 +2,23 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "@ui/components/sidebar/Sidebar";
 import { MainContent } from "@ui/components/main/MainContent";
 import { useStartupRecovery } from "@core/api/useEngine";
+import { useAuth } from "@core/api/useAuth";
+import { startSessionTracking } from "@core/services/session-tracker";
 
 const MIN_WIDTH = 180;
 const MAX_WIDTH = 400;
-const DEFAULT_WIDTH = 224; // w-56
+const DEFAULT_WIDTH = 270; // w-56
 
 export function AppShell() {
+    useAuth();
     useStartupRecovery();
+
+    const sessionStarted = useRef(false);
+    useEffect(() => {
+        if (sessionStarted.current) return;
+        sessionStarted.current = true;
+        startSessionTracking();
+    }, []);
 
     const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);
     const isDragging = useRef(false);

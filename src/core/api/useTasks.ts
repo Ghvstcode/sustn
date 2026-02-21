@@ -15,8 +15,10 @@ import type {
     Task,
     TaskCategory,
     TaskState,
+    EstimatedEffort,
     MessageRole,
 } from "@core/types/task";
+import { metrics } from "@core/services/metrics";
 
 export function useTasks(
     repositoryId: string | undefined,
@@ -48,8 +50,10 @@ export function useCreateTask() {
             category: TaskCategory;
             sortOrder: number;
             baseBranch?: string;
+            estimatedEffort?: EstimatedEffort;
         }) => dbCreateTask(task),
         onSuccess: (task) => {
+            metrics.track("task_created", { category: task.category });
             void queryClient.invalidateQueries({
                 queryKey: ["tasks", task.repositoryId],
             });

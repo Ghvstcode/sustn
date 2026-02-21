@@ -22,6 +22,7 @@ import type {
     ScheduleMode,
     WorkResult,
 } from "@core/types/agent";
+import { metrics } from "@core/services/metrics";
 
 // ── Budget ──────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ export function useUpdateBudgetConfig() {
         mutationFn: (fields: Partial<BudgetConfig>) =>
             updateBudgetConfig(fields),
         onSuccess: () => {
+            metrics.track("settings_changed", { setting: "budget_config" });
             void queryClient.invalidateQueries({
                 queryKey: ["budget-config"],
             });
@@ -84,6 +86,7 @@ export function useUpdateAgentConfig() {
             priority?: number;
         }) => updateAgentConfig(repositoryId, fields),
         onSuccess: (config) => {
+            metrics.track("settings_changed", { setting: "agent_config" });
             void queryClient.invalidateQueries({
                 queryKey: ["agent-config", config.repositoryId],
             });
@@ -298,10 +301,15 @@ export function useStartTask() {
                 "[useStartTask] invoking engine_start_task command — taskId:",
                 params.taskId,
             );
+            metrics.track("agent_run_started", { taskId: params.taskId });
             return invoke<WorkResult>("engine_start_task", params);
         },
         onSuccess: async (result, variables) => {
             console.log("[useStartTask] onSuccess — result:", result);
+            metrics.track("agent_run_completed", {
+                taskId: variables.taskId,
+                success: result.success,
+            });
 
             // Persist WorkResult fields to the task in DB
             try {
@@ -351,6 +359,10 @@ export function useStartTask() {
         },
         onError: async (error, variables) => {
             console.error("[useStartTask] onError — mutation failed:", error);
+            metrics.track("agent_run_completed", {
+                taskId: variables.taskId,
+                success: false,
+            });
 
             // Task is stuck in in_progress — move to failed
             try {
@@ -374,42 +386,6 @@ export function useStartTask() {
             });
             void queryClient.invalidateQueries({
                 queryKey: ["engine-status"],
-            });
-        },
-    });
-}
-
-// ── Controls ────────────────────────────────────────────────
-
-export function usePauseAgent() {
-    const queryClient = useQueryClient();
-
-    return useMutation({
-        mutationFn: (repositoryId?: string) =>
-            invoke("engine_pause", { repositoryId }),
-        onSuccess: () => {
-            void queryClient.invalidateQueries({
-                queryKey: ["engine-status"],
-            });
-            void queryClient.invalidateQueries({
-                queryKey: ["agent-config"],
-            });
-        },
-    });
-}
-
-export function useResumeAgent() {
-    const queryClient = useQueryClient();
-
-    return useMutation({
-        mutationFn: (repositoryId?: string) =>
-            invoke("engine_resume", { repositoryId }),
-        onSuccess: () => {
-            void queryClient.invalidateQueries({
-                queryKey: ["engine-status"],
-            });
-            void queryClient.invalidateQueries({
-                queryKey: ["agent-config"],
             });
         },
     });

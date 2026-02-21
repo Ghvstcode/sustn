@@ -177,12 +177,13 @@ export async function createTask(task: {
     category: TaskCategory;
     sortOrder: number;
     baseBranch?: string;
+    estimatedEffort?: EstimatedEffort;
 }): Promise<Task> {
     const db = await getDb();
     const id = await invoke<string>("generate_task_id");
 
     await db.execute(
-        "INSERT INTO tasks (id, repository_id, title, description, category, sort_order, base_branch) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO tasks (id, repository_id, title, description, category, sort_order, base_branch, estimated_effort) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         [
             id,
             task.repositoryId,
@@ -191,6 +192,7 @@ export async function createTask(task: {
             task.category,
             task.sortOrder,
             task.baseBranch ?? null,
+            task.estimatedEffort ?? null,
         ],
     );
 

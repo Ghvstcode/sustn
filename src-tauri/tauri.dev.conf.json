@@ -31,7 +31,7 @@
     },
     "plugins": {
         "shell": {
-            "open": true
+            "open": "."
         },
         "sql": {
             "preload": ["sqlite:sustn.db"]

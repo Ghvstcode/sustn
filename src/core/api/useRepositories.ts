@@ -6,6 +6,7 @@ import {
     updateLastPulledAt,
     updateDefaultBranch,
 } from "@core/db/repositories";
+import { metrics } from "@core/services/metrics";
 
 interface ValidateResult {
     valid: boolean;
@@ -40,7 +41,8 @@ export function useAddRepository() {
 
             return await dbAddRepository(path, name);
         },
-        onSuccess: () => {
+        onSuccess: (_data, variables) => {
+            metrics.track("project_added", { repositoryName: variables.name });
             void queryClient.invalidateQueries({ queryKey: ["repositories"] });
         },
     });
@@ -70,7 +72,8 @@ export function useCloneRepository() {
             const name = result.path.split("/").pop() ?? "unknown";
             return await dbAddRepository(result.path, name);
         },
-        onSuccess: () => {
+        onSuccess: (repo) => {
+            metrics.track("project_added", { repositoryName: repo.name });
             void queryClient.invalidateQueries({ queryKey: ["repositories"] });
         },
     });
