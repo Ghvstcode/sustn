@@ -18,6 +18,20 @@ export const users = pgTable("users", {
     lastLoginAt: timestamp("last_login_at").defaultNow().notNull(),
 });
 
+export const feedbackEntries = pgTable(
+    "feedback_entries",
+    {
+        id: serial("id").primaryKey(),
+        userId: integer("user_id")
+            .notNull()
+            .references(() => users.id),
+        message: text("message").notNull(),
+        images: jsonb("images"),
+        createdAt: timestamp("created_at").defaultNow().notNull(),
+    },
+    (table) => [index("idx_feedback_entries_user").on(table.userId)],
+);
+
 export const metricEvents = pgTable(
     "metric_events",
     {
