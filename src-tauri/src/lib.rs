@@ -1,7 +1,16 @@
+#![allow(unexpected_cfgs)]
+
+#[cfg(target_os = "macos")]
+#[macro_use]
+extern crate objc;
+
+use tauri::{Emitter, Manager};
+
 mod auth;
 mod command;
 pub mod engine;
 mod engine_commands;
+mod menu;
 pub mod migrations;
 mod preflight;
 mod repository;
@@ -29,6 +38,36 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_deep_link::init())
+        .setup(|app| {
+            let handle = app.handle();
+            let menu = menu::build_menu(handle)?;
+            app.set_menu(menu)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                let _ = window.app_handle().exit(0);
+            }
+        })
+        .on_menu_event(|app, event| {
+            match event.id().as_ref() {
+                "settings" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.emit("menu-navigate", "/settings");
+                    }
+                }
+                "docs" => {
+                    let _ = tauri_plugin_opener::open_url("https://sustn.app/docs", None::<&str>);
+                }
+                "report_issue" => {
+                    let _ = tauri_plugin_opener::open_url(
+                        "https://github.com/sustn/sustn/issues",
+                        None::<&str>,
+                    );
+                }
+                _ => {}
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             command::greet,
             command::open_in_app,
@@ -54,6 +93,8 @@ pub fn run() {
             engine_commands::engine_list_branches,
             engine_commands::engine_get_diff,
             engine_commands::engine_get_diff_stat,
+            engine_commands::engine_create_pr,
+            command::set_dock_badge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

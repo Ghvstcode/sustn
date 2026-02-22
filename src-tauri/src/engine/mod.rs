@@ -53,6 +53,15 @@ pub struct CliResult {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: Option<i32>,
+    /// Session ID from Claude CLI, used to resume conversations.
+    pub session_id: Option<String>,
+}
+
+/// Extract session_id from Claude CLI JSON output.
+fn extract_session_id(stdout: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(stdout.trim())
+        .ok()
+        .and_then(|v| v.get("session_id")?.as_str().map(|s| s.to_string()))
 }
 
 /// Invoke Claude Code CLI with the given prompt in the given working directory.
@@ -60,12 +69,16 @@ pub struct CliResult {
 ///
 /// If `stdin_content` is provided, it is piped to the process via stdin
 /// (used to pass pre-read file context, matching nightshift's approach).
+///
+/// If `resume_session_id` is provided, uses `--resume` to continue a
+/// previous conversation instead of starting fresh.
 pub async fn invoke_claude_cli(
     cwd: &str,
     prompt: &str,
     timeout_secs: u64,
     stdin_content: Option<&str>,
     max_turns: Option<u32>,
+    resume_session_id: Option<&str>,
 ) -> Result<CliResult, String> {
     use std::process::Stdio;
     use tokio::io::AsyncWriteExt;
@@ -91,9 +104,11 @@ pub async fn invoke_claude_cli(
         "--output-format",
         "json",
         "--dangerously-skip-permissions",
-        "-p",
-        prompt,
     ]);
+    if let Some(session_id) = resume_session_id {
+        cmd.args(["--resume", session_id]);
+    }
+    cmd.args(["-p", prompt]);
     if let Some(turns) = max_turns {
         cmd.args(["--max-turns", &turns.to_string()]);
     }
@@ -155,11 +170,13 @@ pub async fn invoke_claude_cli(
                 let stderr_bytes = stderr_task.await.unwrap_or_default();
                 let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
                 let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+                let session_id = extract_session_id(&stdout);
                 println!(
-                    "[engine] claude CLI finished — exit_code={:?}, stdout_len={}, stderr_len={}",
+                    "[engine] claude CLI finished — exit_code={:?}, stdout_len={}, stderr_len={}, session_id={:?}",
                     status.code(),
                     stdout.len(),
-                    stderr.len()
+                    stderr.len(),
+                    session_id,
                 );
                 println!("[engine] ┌─── STDOUT ──────────────────────────────────────");
                 for line in stdout.lines() {
@@ -178,6 +195,7 @@ pub async fn invoke_claude_cli(
                     stdout,
                     stderr,
                     exit_code: status.code(),
+                    session_id,
                 })
             }
             Ok(Err(e)) => {
@@ -205,11 +223,13 @@ pub async fn invoke_claude_cli(
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let session_id = extract_session_id(&stdout);
                 println!(
-                    "[engine] claude CLI finished — exit_code={:?}, stdout_len={}, stderr_len={}",
+                    "[engine] claude CLI finished — exit_code={:?}, stdout_len={}, stderr_len={}, session_id={:?}",
                     output.status.code(),
                     stdout.len(),
-                    stderr.len()
+                    stderr.len(),
+                    session_id,
                 );
                 println!("[engine] ┌─── STDOUT ──────────────────────────────────────");
                 for line in stdout.lines() {
@@ -228,6 +248,7 @@ pub async fn invoke_claude_cli(
                     stdout,
                     stderr,
                     exit_code: output.status.code(),
+                    session_id,
                 })
             }
             Ok(Err(e)) => {

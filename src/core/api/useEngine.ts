@@ -7,13 +7,16 @@ import {
     updateAgentConfig,
     getBudgetConfig,
     updateBudgetConfig,
+    updateLastScanAt,
 } from "@core/db/agent-config";
 import {
     createScannedTask,
     getDeduplicationContext,
+    getTask,
     recoverStaleTasks,
     updateTask as dbUpdateTask,
 } from "@core/db/tasks";
+import { listRepositories } from "@core/db/repositories";
 import type {
     BudgetConfig,
     BudgetStatus,
@@ -23,6 +26,14 @@ import type {
     WorkResult,
 } from "@core/types/agent";
 import { metrics } from "@core/services/metrics";
+import {
+    sendNotification,
+    playSound,
+    incrementBadge,
+} from "@core/services/notifications";
+import { getGlobalSettings } from "@core/db/settings";
+import { savedToast, queuedToast } from "@ui/lib/toast";
+import { useQueueStore } from "@core/store/queue-store";
 
 // ── Budget ──────────────────────────────────────────────────
 
@@ -49,6 +60,7 @@ export function useUpdateBudgetConfig() {
             updateBudgetConfig(fields),
         onSuccess: () => {
             metrics.track("settings_changed", { setting: "budget_config" });
+            savedToast();
             void queryClient.invalidateQueries({
                 queryKey: ["budget-config"],
             });
@@ -87,6 +99,7 @@ export function useUpdateAgentConfig() {
         }) => updateAgentConfig(repositoryId, fields),
         onSuccess: (config) => {
             metrics.track("settings_changed", { setting: "agent_config" });
+            savedToast();
             void queryClient.invalidateQueries({
                 queryKey: ["agent-config", config.repositoryId],
             });
@@ -155,6 +168,7 @@ export function useScanNow() {
             return result;
         },
         onSuccess: (_result, variables) => {
+            void updateLastScanAt(variables.repositoryId);
             void queryClient.invalidateQueries({
                 queryKey: ["agent-config", variables.repositoryId],
             });
@@ -187,6 +201,20 @@ export function useDeepScanListener(repositoryId: string | undefined) {
                 );
                 void queryClient.invalidateQueries({
                     queryKey: ["tasks", repositoryId],
+                });
+
+                // Notify about new tasks found
+                void getGlobalSettings().then((settings) => {
+                    if (settings.notificationsEnabled) {
+                        void sendNotification(
+                            "New tasks discovered",
+                            `Deep scan found ${event.payload.tasksFound} additional task(s).`,
+                        );
+                        void incrementBadge();
+                    }
+                    if (settings.soundEnabled) {
+                        void playSound(settings.soundPreset);
+                    }
                 });
             }
         });
@@ -283,112 +311,482 @@ export function useTaskEventListeners(
     }, [taskId, repositoryId, queryClient]);
 }
 
+// ── Shared Task Result Handling ──────────────────────────────
+
+interface TaskStartParams {
+    taskId: string;
+    repositoryId: string;
+    repoPath: string;
+    taskTitle: string;
+    taskDescription: string;
+    filesInvolved: string[];
+    baseBranch: string;
+    branchName: string;
+    changeRequestFeedback?: string;
+    resumeSessionId?: string;
+}
+
+type QueryClient = ReturnType<typeof useQueryClient>;
+
+function invalidateTaskQueries(
+    queryClient: QueryClient,
+    taskId: string,
+    repositoryId: string,
+) {
+    void queryClient.invalidateQueries({
+        queryKey: ["tasks", repositoryId],
+    });
+    void queryClient.invalidateQueries({
+        queryKey: ["task", taskId],
+    });
+    void queryClient.invalidateQueries({
+        queryKey: ["engine-status"],
+    });
+    void queryClient.invalidateQueries({
+        queryKey: ["budget-status"],
+    });
+}
+
+async function handleTaskResult(
+    result: WorkResult,
+    variables: TaskStartParams,
+    queryClient: QueryClient,
+    /** Send system notifications. False for manual starts (user is already watching). */
+    notify = true,
+) {
+    metrics.track("agent_run_completed", {
+        taskId: variables.taskId,
+        success: result.success,
+    });
+
+    try {
+        if (result.success) {
+            console.log(
+                "[handleTaskResult] persisting success — branch:",
+                result.branchName,
+                "sha:",
+                result.commitSha,
+            );
+
+            const settings = await getGlobalSettings();
+            let prUrl: string | undefined;
+
+            if (
+                settings.autoCreatePrs &&
+                result.branchName &&
+                variables.repoPath
+            ) {
+                try {
+                    const pushResult = await invoke<{
+                        success: boolean;
+                        error?: string;
+                    }>("engine_push_branch", {
+                        repoPath: variables.repoPath,
+                        branchName: result.branchName,
+                    });
+                    if (pushResult.success) {
+                        const pr = await invoke<{ url: string }>(
+                            "engine_create_pr",
+                            {
+                                repoPath: variables.repoPath,
+                                branchName: result.branchName,
+                                baseBranch: variables.baseBranch,
+                                title: variables.taskTitle,
+                                body: `## SUSTN Auto-PR\n\n${variables.taskDescription || variables.taskTitle}\n\nBranch: \`${result.branchName}\``,
+                            },
+                        );
+                        prUrl = pr.url;
+                        console.log(
+                            "[handleTaskResult] auto-PR created:",
+                            prUrl,
+                        );
+                    }
+                } catch (prErr) {
+                    console.error("[handleTaskResult] auto-PR failed:", prErr);
+                }
+            }
+
+            await dbUpdateTask(variables.taskId, {
+                state: prUrl ? ("done" as const) : ("review" as const),
+                baseBranch: variables.baseBranch,
+                branchName: result.branchName,
+                commitSha: result.commitSha,
+                sessionId: result.sessionId,
+                completedAt: new Date().toISOString(),
+                ...(prUrl ? { prUrl } : {}),
+            });
+
+            if (notify && settings.notificationsEnabled) {
+                markTaskNotified(variables.taskId);
+                sendNotification(
+                    prUrl ? "PR created" : "Task ready for review",
+                    `"${variables.taskTitle}" completed successfully.`,
+                );
+                void incrementBadge();
+            }
+            if (notify && settings.soundEnabled) {
+                markTaskNotified(variables.taskId);
+                void playSound(settings.soundPreset);
+            }
+        } else {
+            console.log(
+                "[handleTaskResult] persisting failure — error:",
+                result.error,
+            );
+            await dbUpdateTask(variables.taskId, {
+                state: "failed" as const,
+                lastError: result.error ?? "Unknown error",
+                branchName: result.branchName,
+                sessionId: result.sessionId,
+            });
+
+            if (notify) {
+                const settings = await getGlobalSettings();
+                if (settings.notificationsEnabled) {
+                    markTaskNotified(variables.taskId);
+                    sendNotification(
+                        "Task failed",
+                        `"${variables.taskTitle}" — ${result.error ?? "Unknown error"}`,
+                    );
+                    void incrementBadge();
+                }
+                if (settings.soundEnabled) {
+                    markTaskNotified(variables.taskId);
+                    void playSound(settings.soundPreset);
+                }
+            }
+        }
+    } catch (e) {
+        console.error("[handleTaskResult] failed to persist WorkResult:", e);
+    }
+
+    invalidateTaskQueries(
+        queryClient,
+        variables.taskId,
+        variables.repositoryId,
+    );
+}
+
+async function handleTaskError(
+    error: unknown,
+    variables: TaskStartParams,
+    queryClient: QueryClient,
+    /** Send system notifications. False for manual starts (user is already watching). */
+    notify = true,
+) {
+    console.error("[handleTaskError] task mutation failed:", error);
+    metrics.track("agent_run_completed", {
+        taskId: variables.taskId,
+        success: false,
+    });
+
+    try {
+        await dbUpdateTask(variables.taskId, {
+            state: "failed" as const,
+            lastError: error instanceof Error ? error.message : String(error),
+        });
+    } catch (e) {
+        console.error("[handleTaskError] failed to persist error state:", e);
+    }
+
+    if (notify) {
+        try {
+            const settings = await getGlobalSettings();
+            if (settings.notificationsEnabled) {
+                void sendNotification(
+                    "Task failed",
+                    `"${variables.taskTitle}" encountered an error.`,
+                );
+                void incrementBadge();
+            }
+            if (settings.soundEnabled) {
+                void playSound(settings.soundPreset);
+            }
+        } catch {
+            // settings read failed — skip notification
+        }
+    }
+
+    invalidateTaskQueries(
+        queryClient,
+        variables.taskId,
+        variables.repositoryId,
+    );
+}
+
 // ── Working ─────────────────────────────────────────────────
 
 export function useStartTask() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: (params: {
-            taskId: string;
-            repositoryId: string;
-            repoPath: string;
-            taskTitle: string;
-            taskDescription: string;
-            filesInvolved: string[];
-        }) => {
+        mutationFn: (params: TaskStartParams) => {
             console.log(
                 "[useStartTask] invoking engine_start_task command — taskId:",
                 params.taskId,
             );
             metrics.track("agent_run_started", { taskId: params.taskId });
-            return invoke<WorkResult>("engine_start_task", params);
+            return invoke<WorkResult>("engine_start_task", { ...params });
         },
-        onSuccess: async (result, variables) => {
-            console.log("[useStartTask] onSuccess — result:", result);
-            metrics.track("agent_run_completed", {
-                taskId: variables.taskId,
-                success: result.success,
-            });
-
-            // Persist WorkResult fields to the task in DB
-            try {
-                if (result.success) {
-                    console.log(
-                        "[useStartTask] persisting success — branch:",
-                        result.branchName,
-                        "sha:",
-                        result.commitSha,
-                    );
-                    await dbUpdateTask(variables.taskId, {
-                        state: "review" as const,
-                        branchName: result.branchName,
-                        commitSha: result.commitSha,
-                        completedAt: new Date().toISOString(),
-                    });
-                } else {
-                    console.log(
-                        "[useStartTask] persisting failure — error:",
-                        result.error,
-                    );
-                    await dbUpdateTask(variables.taskId, {
-                        state: "failed" as const,
-                        lastError: result.error ?? "Unknown error",
-                        branchName: result.branchName,
-                    });
-                }
-            } catch (e) {
-                console.error(
-                    "[useStartTask] failed to persist WorkResult to DB:",
-                    e,
-                );
-            }
-
-            void queryClient.invalidateQueries({
-                queryKey: ["tasks", variables.repositoryId],
-            });
-            void queryClient.invalidateQueries({
-                queryKey: ["task", variables.taskId],
-            });
-            void queryClient.invalidateQueries({
-                queryKey: ["engine-status"],
-            });
-            void queryClient.invalidateQueries({
-                queryKey: ["budget-status"],
-            });
-        },
-        onError: async (error, variables) => {
-            console.error("[useStartTask] onError — mutation failed:", error);
-            metrics.track("agent_run_completed", {
-                taskId: variables.taskId,
-                success: false,
-            });
-
-            // Task is stuck in in_progress — move to failed
-            try {
-                await dbUpdateTask(variables.taskId, {
-                    state: "failed" as const,
-                    lastError:
-                        error instanceof Error ? error.message : String(error),
+        onSuccess: (result, variables) =>
+            handleTaskResult(result, variables, queryClient),
+        onError: (error, variables) => {
+            const msg = error instanceof Error ? error.message : String(error);
+            if (msg.includes("Another task is already in progress")) {
+                // Race condition: engine busy but stale status didn't show it.
+                // Queue the task instead of failing it.
+                useQueueStore.getState().enqueue(variables);
+                queuedToast();
+                void dbUpdateTask(variables.taskId, {
+                    state: "pending" as const,
                 });
-            } catch (e) {
-                console.error(
-                    "[useStartTask] failed to persist error state to DB:",
-                    e,
+                invalidateTaskQueries(
+                    queryClient,
+                    variables.taskId,
+                    variables.repositoryId,
                 );
+                return;
             }
-
-            void queryClient.invalidateQueries({
-                queryKey: ["tasks", variables.repositoryId],
-            });
-            void queryClient.invalidateQueries({
-                queryKey: ["task", variables.taskId],
-            });
-            void queryClient.invalidateQueries({
-                queryKey: ["engine-status"],
-            });
+            if (msg.includes("Budget exhausted")) {
+                // Budget ran out — keep task pending, don't mark as failed.
+                void dbUpdateTask(variables.taskId, {
+                    state: "pending" as const,
+                });
+                invalidateTaskQueries(
+                    queryClient,
+                    variables.taskId,
+                    variables.repositoryId,
+                );
+                return;
+            }
+            void handleTaskError(error, variables, queryClient);
         },
     });
+}
+
+// ── Queue Processor ─────────────────────────────────────────
+
+/**
+ * Global hook that auto-starts queued tasks when the current task finishes.
+ * Mount once in AppShell.
+ */
+export function useQueueProcessor() {
+    const queryClient = useQueryClient();
+    const processingRef = useRef(false);
+
+    useEffect(() => {
+        async function processNext() {
+            if (processingRef.current) return;
+
+            // Check budget before dequeuing
+            try {
+                const status = await invoke<BudgetStatus>("engine_get_budget");
+                if (status.budgetExhausted) {
+                    console.log("[queue] budget exhausted — pausing queue");
+                    return;
+                }
+            } catch (e) {
+                console.error("[queue] budget check failed:", e);
+            }
+
+            const next = useQueueStore.getState().dequeue();
+            if (!next) return;
+
+            processingRef.current = true;
+            console.log(
+                "[queue] starting next task:",
+                next.taskId,
+                next.taskTitle,
+            );
+
+            // Mark task as in_progress in DB
+            try {
+                await dbUpdateTask(next.taskId, {
+                    state: "in_progress" as const,
+                    startedAt: new Date().toISOString(),
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ["task", next.taskId],
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ["tasks", next.repositoryId],
+                });
+            } catch (e) {
+                console.error("[queue] failed to mark task in_progress:", e);
+            }
+
+            // Execute the task
+            let requeued = false;
+            try {
+                metrics.track("agent_run_started", { taskId: next.taskId });
+                const result = await invoke<WorkResult>("engine_start_task", {
+                    ...next,
+                });
+                await handleTaskResult(result, next, queryClient);
+            } catch (error) {
+                const msg =
+                    error instanceof Error ? error.message : String(error);
+                if (msg.includes("Another task is already in progress")) {
+                    // Engine still busy — put task back and wait for completion event
+                    useQueueStore.getState().enqueue(next);
+                    await dbUpdateTask(next.taskId, {
+                        state: "pending" as const,
+                    });
+                    invalidateTaskQueries(
+                        queryClient,
+                        next.taskId,
+                        next.repositoryId,
+                    );
+                    requeued = true;
+                } else {
+                    await handleTaskError(error, next, queryClient);
+                }
+            } finally {
+                processingRef.current = false;
+                if (!requeued) {
+                    // Chain: check for more queued tasks
+                    void processNext();
+                }
+            }
+        }
+
+        const unlisteners: Promise<() => void>[] = [];
+
+        // Listen for task completion/failure to trigger queue processing
+        unlisteners.push(
+            listen("agent:task-completed", () => {
+                void processNext();
+            }),
+        );
+        unlisteners.push(
+            listen("agent:task-failed", () => {
+                void processNext();
+            }),
+        );
+
+        // Also process when a task is enqueued while engine is idle
+        const unsub = useQueueStore.subscribe((state, prevState) => {
+            if (state.queue.length > prevState.queue.length) {
+                // Only start if the engine is actually idle
+                void invoke<EngineStatus>("engine_get_status")
+                    .then((status) => {
+                        if (!status.currentTask) {
+                            void processNext();
+                        }
+                    })
+                    .catch(() => {});
+            }
+        });
+
+        return () => {
+            unsub();
+            for (const p of unlisteners) {
+                void p.then((fn) => fn());
+            }
+        };
+    }, [queryClient]);
+}
+
+// ── Global Task Notifications ────────────────────────────────
+
+/**
+ * Catch-all notification handler for task completion/failure events.
+ * Fires regardless of whether the task was started by the scheduler,
+ * queue processor, or manual useStartTask — ensures the user always
+ * gets notified even if the primary code path is interrupted.
+ *
+ * Uses a Set to deduplicate with notifications sent inline by the
+ * scheduler or handleTaskResult.
+ *
+ * Mount once in AppShell.
+ */
+const notifiedTaskIds = new Set<string>();
+
+export function markTaskNotified(taskId: string): void {
+    notifiedTaskIds.add(taskId);
+    // Auto-clean after 30s to prevent unbounded growth
+    setTimeout(() => notifiedTaskIds.delete(taskId), 30_000);
+}
+
+export function useGlobalTaskNotifications() {
+    useEffect(() => {
+        const unlisteners: Promise<() => void>[] = [];
+
+        unlisteners.push(
+            listen<{
+                taskId: string;
+                repositoryId: string;
+                branchName: string | null;
+                commitSha: string | null;
+            }>("agent:task-completed", (event) => {
+                const { taskId } = event.payload;
+                if (notifiedTaskIds.has(taskId)) return;
+                markTaskNotified(taskId);
+
+                void (async () => {
+                    try {
+                        const settings = await getGlobalSettings();
+                        const task = await getTask(taskId);
+                        const title = task?.title ?? "Task";
+
+                        if (settings.notificationsEnabled) {
+                            sendNotification(
+                                task?.prUrl
+                                    ? "PR created"
+                                    : "Task ready for review",
+                                `"${title}" completed successfully.`,
+                            );
+                            void incrementBadge();
+                        }
+                        if (settings.soundEnabled) {
+                            void playSound(settings.soundPreset);
+                        }
+                    } catch (err) {
+                        console.error("[global-notify] failed:", err);
+                    }
+                })();
+            }),
+        );
+
+        unlisteners.push(
+            listen<{
+                taskId: string;
+                repositoryId: string;
+                error: string | null;
+            }>("agent:task-failed", (event) => {
+                const { taskId, error } = event.payload;
+                if (notifiedTaskIds.has(taskId)) return;
+                markTaskNotified(taskId);
+
+                void (async () => {
+                    try {
+                        const settings = await getGlobalSettings();
+                        const task = await getTask(taskId);
+                        const title = task?.title ?? "Task";
+
+                        if (settings.notificationsEnabled) {
+                            sendNotification(
+                                "Task failed",
+                                `"${title}" — ${error ?? "Unknown error"}`,
+                            );
+                            void incrementBadge();
+                        }
+                        if (settings.soundEnabled) {
+                            void playSound(settings.soundPreset);
+                        }
+                    } catch (err) {
+                        console.error("[global-notify] failed:", err);
+                    }
+                })();
+            }),
+        );
+
+        return () => {
+            for (const p of unlisteners) {
+                void p.then((fn) => fn());
+            }
+        };
+    }, []);
 }
 
 // ── Branch Operations ───────────────────────────────────────
@@ -406,6 +804,18 @@ export function usePushBranch() {
                 repoPath,
                 branchName,
             }),
+    });
+}
+
+export function useCreatePr() {
+    return useMutation({
+        mutationFn: (params: {
+            repoPath: string;
+            branchName: string;
+            baseBranch: string;
+            title: string;
+            body: string;
+        }) => invoke<{ url: string }>("engine_create_pr", params),
     });
 }
 
@@ -477,4 +887,91 @@ export function useStartupRecovery() {
             }
         });
     }, [queryClient]);
+}
+
+// ── Startup Scan ────────────────────────────────────────────
+
+/**
+ * Scans repositories that have never been scanned on app startup.
+ * Runs once, staggering scans to avoid overloading the system.
+ * Call once from the top-level app shell.
+ */
+export function useStartupScan() {
+    const queryClient = useQueryClient();
+    const started = useRef(false);
+
+    useEffect(() => {
+        if (started.current) return;
+        started.current = true;
+
+        void runStartupScans(queryClient);
+    }, [queryClient]);
+}
+
+async function runStartupScans(queryClient: ReturnType<typeof useQueryClient>) {
+    // Short delay to let the app finish initializing
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+
+    try {
+        const repos = await listRepositories();
+
+        for (const repo of repos) {
+            const config = await getAgentConfig(repo.id);
+
+            // Only auto-scan repos that have NEVER been scanned
+            if (config.lastScanAt) continue;
+
+            console.log(
+                `[startup-scan] ${repo.name} has never been scanned — triggering`,
+            );
+
+            try {
+                const result = await invoke<ScanResult>("engine_scan_now", {
+                    repoPath: repo.path,
+                    repositoryId: repo.id,
+                });
+
+                // Persist quick-scan tasks
+                const baseBranch = repo.defaultBranch ?? "main";
+                if (result.tasksFound.length > 0) {
+                    const { existingTitles, maxSortOrder } =
+                        await getDeduplicationContext(repo.id);
+                    let nextOrder = maxSortOrder;
+
+                    for (const scanned of result.tasksFound) {
+                        const normalized = scanned.title.toLowerCase().trim();
+                        if (existingTitles.has(normalized)) continue;
+
+                        await createScannedTask(
+                            repo.id,
+                            scanned,
+                            ++nextOrder,
+                            baseBranch,
+                        );
+                        existingTitles.add(normalized);
+                    }
+                }
+
+                await updateLastScanAt(repo.id);
+
+                void queryClient.invalidateQueries({
+                    queryKey: ["tasks", repo.id],
+                });
+                void queryClient.invalidateQueries({
+                    queryKey: ["agent-config", repo.id],
+                });
+
+                console.log(
+                    `[startup-scan] ${repo.name} — ${result.tasksFound.length} task(s) found`,
+                );
+            } catch (e) {
+                console.error(
+                    `[startup-scan] scan failed for ${repo.name}:`,
+                    e,
+                );
+            }
+        }
+    } catch (e) {
+        console.error("[startup-scan] failed:", e);
+    }
 }

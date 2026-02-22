@@ -69,6 +69,7 @@ export interface WorkResult {
     filesModified: string[];
     summary: string | undefined;
     error: string | undefined;
+    sessionId: string | undefined;
 }
 
 export interface AgentRun {

@@ -2,7 +2,93 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
+use super::budget::BudgetConfig;
 use super::scanner::ScannedTask;
+
+/// Read the budget config from the SQLite database.
+/// Overlays the global "Budget ceiling" setting from `global_settings` onto the config,
+/// since that's what the user actually controls via the UI.
+/// Falls back to BudgetConfig::default() if the row doesn't exist or the DB can't be read.
+pub fn read_budget_config(app_data_dir: &Path) -> BudgetConfig {
+    let db_path = app_data_dir.join("sustn.db");
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("[engine] read_budget_config — failed to open DB: {e}");
+            return BudgetConfig::default();
+        }
+    };
+
+    let mut config = conn
+        .query_row(
+            "SELECT weekly_token_budget, max_usage_percent, reserve_percent, billing_mode FROM budget_config WHERE id = 1",
+            [],
+            |row| {
+                Ok(BudgetConfig {
+                    weekly_token_budget: row.get(0)?,
+                    max_usage_percent: row.get(1)?,
+                    reserve_percent: row.get(2)?,
+                    billing_mode: row.get(3)?,
+                })
+            },
+        )
+        .unwrap_or_else(|e| {
+            println!("[engine] read_budget_config — query failed, using defaults: {e}");
+            BudgetConfig::default()
+        });
+
+    // Override max_usage_percent with the global "Budget ceiling" slider value.
+    // The ceiling already accounts for the reserve (e.g. 75% ceiling = 25% reserved),
+    // so we zero out the separate reserve_percent.
+    if let Ok(ceiling) = read_global_setting_int(&conn, "budget_ceiling_percent") {
+        config.max_usage_percent = ceiling;
+        config.reserve_percent = 0;
+    }
+
+    config
+}
+
+/// Read the effective budget ceiling percent for a specific project.
+/// Returns the per-project override if set, otherwise the global ceiling.
+pub fn read_effective_ceiling_percent(app_data_dir: &Path, repository_id: &str) -> i32 {
+    let db_path = app_data_dir.join("sustn.db");
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("[engine] read_effective_ceiling_percent — failed to open DB: {e}");
+            return 75; // default
+        }
+    };
+
+    // Check per-project override first
+    let project_override: Option<i32> = conn
+        .query_row(
+            "SELECT override_budget_ceiling_percent FROM agent_config WHERE repository_id = ?1",
+            [repository_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+
+    if let Some(override_pct) = project_override {
+        return override_pct;
+    }
+
+    // Fall back to global ceiling
+    read_global_setting_int(&conn, "budget_ceiling_percent").unwrap_or(75)
+}
+
+/// Read an integer value from the global_settings key-value table.
+fn read_global_setting_int(conn: &Connection, key: &str) -> Result<i32, rusqlite::Error> {
+    let val: String = conn.query_row(
+        "SELECT value FROM global_settings WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    )?;
+    val.parse::<i32>().map_err(|_| {
+        rusqlite::Error::InvalidParameterName(format!("Cannot parse '{val}' as i32 for key {key}"))
+    })
+}
 
 /// Save scanned tasks directly to the SQLite database from Rust.
 /// Used by Pass 2 (deep scan) which runs in the background and needs

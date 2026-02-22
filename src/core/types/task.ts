@@ -38,6 +38,7 @@ export interface Task {
     baseBranch: string | undefined;
     branchName: string | undefined;
     commitSha: string | undefined;
+    sessionId: string | undefined;
     tokensUsed: number;
     retryCount: number;
     lastError: string | undefined;

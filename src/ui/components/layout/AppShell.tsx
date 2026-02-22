@@ -1,9 +1,16 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Sidebar } from "@ui/components/sidebar/Sidebar";
 import { MainContent } from "@ui/components/main/MainContent";
-import { useStartupRecovery } from "@core/api/useEngine";
+import {
+    useStartupRecovery,
+    useStartupScan,
+    useQueueProcessor,
+    useGlobalTaskNotifications,
+} from "@core/api/useEngine";
 import { useAuth } from "@core/api/useAuth";
+import { useScheduler } from "@core/api/useScheduler";
 import { startSessionTracking } from "@core/services/session-tracker";
+import { initNotificationPermission } from "@core/services/notifications";
 
 const MIN_WIDTH = 180;
 const MAX_WIDTH = 400;
@@ -12,12 +19,17 @@ const DEFAULT_WIDTH = 270; // w-56
 export function AppShell() {
     useAuth();
     useStartupRecovery();
+    useStartupScan();
+    useScheduler();
+    useQueueProcessor();
+    useGlobalTaskNotifications();
 
     const sessionStarted = useRef(false);
     useEffect(() => {
         if (sessionStarted.current) return;
         sessionStarted.current = true;
         startSessionTracking();
+        void initNotificationPermission();
     }, []);
 
     const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);

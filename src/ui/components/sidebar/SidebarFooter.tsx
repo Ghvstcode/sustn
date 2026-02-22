@@ -1,8 +1,13 @@
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "@core/store/auth-store";
-import { Settings } from "lucide-react";
+import { Settings, MessageSquare } from "lucide-react";
+import { FeedbackDialog } from "./FeedbackDialog";
 
 export function SidebarFooter() {
+    const navigate = useNavigate();
     const user = useAuthStore((s) => s.user);
+    const [feedbackOpen, setFeedbackOpen] = useState(false);
 
     return (
         <div className="border-t border-sidebar-border px-3 py-2.5">
@@ -23,11 +28,26 @@ export function SidebarFooter() {
                 </span>
                 <button
                     type="button"
+                    onClick={() => setFeedbackOpen(true)}
                     className="rounded p-0.5 text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+                    title="Send feedback"
+                >
+                    <MessageSquare className="h-3 w-3" />
+                </button>
+                <button
+                    type="button"
+                    onClick={() => navigate("/settings")}
+                    className="rounded p-0.5 text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+                    title="Settings"
                 >
                     <Settings className="h-3 w-3" />
                 </button>
             </div>
+
+            <FeedbackDialog
+                open={feedbackOpen}
+                onOpenChange={setFeedbackOpen}
+            />
         </div>
     );
 }

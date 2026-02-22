@@ -10,6 +10,7 @@ import {
     XCircle,
     Pencil,
     MessageSquare,
+    Clock,
 } from "lucide-react";
 import { Badge } from "@ui/components/ui/badge";
 import { useUpdateTask } from "@core/api/useTasks";
@@ -28,6 +29,8 @@ interface TaskRowProps {
     canMoveDown?: boolean;
     isActive?: boolean;
     onHover?: () => void;
+    isQueued?: boolean;
+    queuePosition?: number;
 }
 
 const categoryLabels: Record<string, string> = {
@@ -60,6 +63,8 @@ export function TaskRow({
     canMoveDown = false,
     isActive = false,
     onHover,
+    isQueued = false,
+    queuePosition = -1,
 }: TaskRowProps) {
     const updateTask = useUpdateTask();
     const [isEditing, setIsEditing] = useState(false);
@@ -83,7 +88,11 @@ export function TaskRow({
     };
 
     const isDone = task.state === "done" || task.state === "dismissed";
-    const prefix = statePrefix[task.state];
+    const prefix = isQueued
+        ? queuePosition === 0
+            ? "Up Next"
+            : `Queued #${queuePosition + 1}`
+        : statePrefix[task.state];
 
     function handleToggleDone(e: React.MouseEvent) {
         e.stopPropagation();
@@ -118,6 +127,14 @@ export function TaskRow({
     }
 
     const stateIcon = (() => {
+        if (isQueued) {
+            return (
+                <span className="shrink-0">
+                    <Clock className="h-4 w-4 text-violet-500" />
+                </span>
+            );
+        }
+
         switch (task.state) {
             case "pending":
                 return (

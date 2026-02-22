@@ -39,7 +39,33 @@ export function useAddRepository() {
                 throw new Error(result.error ?? "Not a valid git repository");
             }
 
-            return await dbAddRepository(path, name);
+            const repo = await dbAddRepository(path, name);
+
+            // Auto-detect default branch: prefer main/master (conventional
+            // base branches), then fall back to current or first branch.
+            try {
+                const branches = await invoke<
+                    Array<{ name: string; isCurrent: boolean }>
+                >("engine_list_branches", { repoPath: path });
+
+                if (branches.length > 0) {
+                    const names = branches.map((b) => b.name);
+                    const currentBranch = branches.find(
+                        (b) => b.isCurrent,
+                    )?.name;
+                    const detected = names.includes("main")
+                        ? "main"
+                        : names.includes("master")
+                          ? "master"
+                          : (currentBranch ?? branches[0].name);
+                    await updateDefaultBranch(repo.id, detected);
+                }
+                // Empty repo (no branches yet) — user sets it in settings.
+            } catch {
+                // Branch listing failed — user will configure in settings.
+            }
+
+            return repo;
         },
         onSuccess: (_data, variables) => {
             metrics.track("project_added", { repositoryName: variables.name });

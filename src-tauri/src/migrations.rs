@@ -203,5 +203,53 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 11,
+            description: "create global_settings table and add project override columns",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS global_settings (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                INSERT OR IGNORE INTO global_settings (key, value) VALUES
+                    ('notifications_enabled', 'false'),
+                    ('sound_enabled', 'false'),
+                    ('sound_preset', 'chime'),
+                    ('auto_create_prs', 'false'),
+                    ('delete_branch_on_dismiss', 'false'),
+                    ('branch_prefix_mode', 'sustn'),
+                    ('branch_prefix_custom', ''),
+                    ('branch_name_style', 'slug'),
+                    ('default_base_branch', 'main'),
+                    ('remote_origin', 'origin'),
+                    ('agent_mode', 'scheduled'),
+                    ('schedule_days', 'mon,tue,wed,thu,fri,sat,sun'),
+                    ('schedule_start', '00:00'),
+                    ('schedule_end', '06:00'),
+                    ('schedule_timezone', ''),
+                    ('scan_frequency', 'daily'),
+                    ('budget_ceiling_percent', '75'),
+                    ('show_budget_in_sidebar', 'true');
+
+                ALTER TABLE agent_config ADD COLUMN override_base_branch TEXT;
+                ALTER TABLE agent_config ADD COLUMN override_remote_origin TEXT;
+                ALTER TABLE agent_config ADD COLUMN override_branch_prefix_mode TEXT;
+                ALTER TABLE agent_config ADD COLUMN override_branch_prefix_custom TEXT;
+                ALTER TABLE agent_config ADD COLUMN override_budget_ceiling_percent INTEGER;
+                ALTER TABLE agent_config ADD COLUMN agent_preferences TEXT;
+                ALTER TABLE agent_config ADD COLUMN scan_preferences TEXT;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 12,
+            description: "add session_id to tasks for Claude CLI conversation resumption",
+            sql: r#"
+                ALTER TABLE tasks ADD COLUMN session_id TEXT;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

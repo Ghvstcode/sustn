@@ -102,7 +102,13 @@ export default function Home() {
                     </a>
                     <div className="flex items-center gap-6">
                         <a
-                            href="#how-it-works"
+                            href="/docs"
+                            className="text-sm text-gray-400 hover:text-black transition-colors hidden sm:block"
+                        >
+                            Docs
+                        </a>
+                        <a
+                            href="/docs"
                             className="text-sm text-gray-400 hover:text-black transition-colors hidden sm:block"
                         >
                             How it works
@@ -164,7 +170,7 @@ export default function Home() {
                             </svg>
                         </a>
                         <a
-                            href="#how-it-works"
+                            href="/docs"
                             className="border border-gray-200 bg-white text-black font-semibold text-sm px-5 py-3 rounded-lg hover:bg-gray-50 transition-colors mono inline-flex items-center justify-between gap-2"
                         >
                             Learn how it works
@@ -368,6 +374,12 @@ export default function Home() {
                         {new Date().getFullYear()} sustn
                     </div>
                     <div className="flex gap-8 text-gray-500">
+                        <a
+                            href="/docs"
+                            className="hover:text-black transition-colors font-medium"
+                        >
+                            Docs
+                        </a>
                         <a
                             href="#"
                             className="hover:text-black transition-colors font-medium"

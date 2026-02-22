@@ -45,6 +45,11 @@ pub fn create_branch(cwd: &str, branch_name: &str) -> GitResult {
     run_git(cwd, &["checkout", "-b", branch_name])
 }
 
+/// Create and checkout a new branch starting from a specific base branch.
+pub fn create_branch_from(cwd: &str, branch_name: &str, base_branch: &str) -> GitResult {
+    run_git(cwd, &["checkout", "-b", branch_name, base_branch])
+}
+
 /// Checkout an existing branch.
 pub fn checkout_branch(cwd: &str, branch_name: &str) -> GitResult {
     run_git(cwd, &["checkout", branch_name])
@@ -135,16 +140,16 @@ pub struct DiffFileStat {
     pub deletions: u32,
 }
 
-pub fn diff_stat(cwd: &str, base_branch: &str, head_branch: &str) -> Vec<DiffFileStat> {
+pub fn diff_stat(cwd: &str, base_branch: &str, head_branch: &str) -> Result<Vec<DiffFileStat>, String> {
     let result = run_git(
         cwd,
         &["diff", "--numstat", &format!("{}...{}", base_branch, head_branch)],
     );
     if !result.success {
-        return vec![];
+        return Err(result.error.unwrap_or_else(|| "git diff --numstat failed".to_string()));
     }
 
-    result
+    Ok(result
         .output
         .lines()
         .filter_map(|line| {
@@ -161,7 +166,7 @@ pub fn diff_stat(cwd: &str, base_branch: &str, head_branch: &str) -> Vec<DiffFil
                 None
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Generate a branch name for a task.

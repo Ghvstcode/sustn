@@ -11,6 +11,7 @@ interface TaskChangedFilesSidebarProps {
     onBrowseFileSelect: (file: string) => void;
     actions?: React.ReactNode;
     hasChanges: boolean;
+    diffError?: string | null;
 }
 
 function getFileName(path: string): string {
@@ -31,6 +32,7 @@ export function TaskChangedFilesSidebar({
     onBrowseFileSelect,
     actions,
     hasChanges,
+    diffError,
 }: TaskChangedFilesSidebarProps) {
     const [tab, setTab] = useState<"all_files" | "changes">("all_files");
 
@@ -143,6 +145,12 @@ export function TaskChangedFilesSidebar({
                         })}
                     </div>
                 </ScrollArea>
+            ) : diffError ? (
+                <div className="flex-1 flex items-center justify-center px-4">
+                    <p className="text-xs text-destructive/70 text-center">
+                        Failed to load diff: {diffError}
+                    </p>
+                </div>
             ) : (
                 <div className="flex-1 flex items-center justify-center">
                     <p className="text-xs text-muted-foreground/40">

@@ -30,6 +30,7 @@ interface TaskRow {
     base_branch: string | null;
     branch_name: string | null;
     commit_sha: string | null;
+    session_id: string | null;
     tokens_used: number | null;
     retry_count: number | null;
     last_error: string | null;
@@ -72,6 +73,17 @@ function parseFilesInvolved(raw: string | null): string[] | undefined {
     }
 }
 
+/**
+ * Ensure a timestamp string from SQLite is parseable as UTC.
+ * SQLite CURRENT_TIMESTAMP returns "YYYY-MM-DD HH:MM:SS" (UTC but no
+ * timezone indicator). Without "Z", JS engines may interpret it as local
+ * time, breaking Date comparisons against Date.now() epoch ms.
+ */
+function ensureUtc(ts: string): string {
+    if (ts.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(ts)) return ts;
+    return ts.replace(" ", "T") + "Z";
+}
+
 function rowToTask(row: TaskRow): Task {
     return {
         id: row.id,
@@ -91,13 +103,14 @@ function rowToTask(row: TaskRow): Task {
         baseBranch: row.base_branch ?? undefined,
         branchName: row.branch_name ?? undefined,
         commitSha: row.commit_sha ?? undefined,
+        sessionId: row.session_id ?? undefined,
         tokensUsed: row.tokens_used ?? 0,
         retryCount: row.retry_count ?? 0,
         lastError: row.last_error ?? undefined,
         startedAt: row.started_at ?? undefined,
         completedAt: row.completed_at ?? undefined,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
+        createdAt: ensureUtc(row.created_at),
+        updatedAt: ensureUtc(row.updated_at),
     };
 }
 
@@ -110,7 +123,7 @@ function rowToTaskEvent(row: TaskEventRow): TaskEvent {
         oldValue: row.old_value ?? undefined,
         newValue: row.new_value ?? undefined,
         comment: row.comment ?? undefined,
-        createdAt: row.created_at,
+        createdAt: ensureUtc(row.created_at),
     };
 }
 
@@ -238,8 +251,10 @@ export async function updateTask(
             | "notes"
             | "prUrl"
             | "category"
+            | "baseBranch"
             | "branchName"
             | "commitSha"
+            | "sessionId"
             | "lastError"
             | "startedAt"
             | "completedAt"
@@ -288,6 +303,10 @@ export async function updateTask(
         setClauses.push(`category = $${paramIndex++}`);
         values.push(fields.category);
     }
+    if (fields.baseBranch !== undefined) {
+        setClauses.push(`base_branch = $${paramIndex++}`);
+        values.push(fields.baseBranch);
+    }
     if (fields.branchName !== undefined) {
         setClauses.push(`branch_name = $${paramIndex++}`);
         values.push(fields.branchName);
@@ -295,6 +314,10 @@ export async function updateTask(
     if (fields.commitSha !== undefined) {
         setClauses.push(`commit_sha = $${paramIndex++}`);
         values.push(fields.commitSha);
+    }
+    if (fields.sessionId !== undefined) {
+        setClauses.push(`session_id = $${paramIndex++}`);
+        values.push(fields.sessionId);
     }
     if (fields.lastError !== undefined) {
         setClauses.push(`last_error = $${paramIndex++}`);
@@ -404,7 +427,7 @@ function rowToTaskMessage(row: TaskMessageRow): TaskMessage {
         role: row.role as MessageRole,
         content: row.content,
         metadata,
-        createdAt: row.created_at,
+        createdAt: ensureUtc(row.created_at),
     };
 }
 
@@ -450,6 +473,21 @@ export async function getMessagesForPrompt(taskId: string): Promise<string> {
             return `[${label}] ${m.content}`;
         })
         .join("\n");
+}
+
+/**
+ * Get the next pending task for a repository, ordered by sort_order (priority).
+ * Returns undefined if no pending tasks exist.
+ */
+export async function getNextPendingTask(
+    repositoryId: string,
+): Promise<Task | undefined> {
+    const db = await getDb();
+    const rows = await db.select<TaskRow[]>(
+        "SELECT * FROM tasks WHERE repository_id = $1 AND state = 'pending' ORDER BY sort_order ASC LIMIT 1",
+        [repositoryId],
+    );
+    return rows[0] ? rowToTask(rows[0]) : undefined;
 }
 
 // ── Agent Engine Helpers ────────────────────────────────────

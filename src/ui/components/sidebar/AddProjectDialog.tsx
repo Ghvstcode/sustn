@@ -20,7 +20,7 @@ import {
 interface AddProjectDialogProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    onSuccess: (repoId: string) => void;
+    onSuccess: (repoId: string, repoPath: string) => void;
 }
 
 type Mode = "choose" | "clone";
@@ -70,7 +70,7 @@ export function AddProjectDialog({
             { path, name },
             {
                 onSuccess: (repo) => {
-                    onSuccess(repo.id);
+                    onSuccess(repo.id, repo.path);
                     handleClose();
                 },
                 onError: (err: Error) => setError(err.message),
@@ -118,7 +118,7 @@ export function AddProjectDialog({
             { url: cloneUrl.trim(), destination },
             {
                 onSuccess: (repo) => {
-                    onSuccess(repo.id);
+                    onSuccess(repo.id, repo.path);
                     handleClose();
                 },
                 onError: (err: Error) => setError(err.message),

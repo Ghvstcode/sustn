@@ -20,9 +20,10 @@ import {
     useDeleteTask,
 } from "@core/api/useTasks";
 import { useRepositories } from "@core/api/useRepositories";
-import { useScanNow } from "@core/api/useEngine";
+import { useScanNow, useDeepScanListener } from "@core/api/useEngine";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "@core/store/app-store";
+import { useQueueStore } from "@core/store/queue-store";
 import type { TaskCategory, EstimatedEffort } from "@core/types/task";
 import { TaskListHeader } from "./TaskListHeader";
 import { TaskRow } from "./TaskRow";
@@ -40,10 +41,12 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
 
     const { data: tasks } = useTasks(repositoryId, defaultBranch);
     const setSelectedTask = useAppStore((s) => s.setSelectedTask);
+    const queue = useQueueStore((s) => s.queue);
     const createTask = useCreateTask();
     const reorderTask = useReorderTask();
     const deleteTask = useDeleteTask();
     const scanNow = useScanNow();
+    useDeepScanListener(repositoryId);
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
 
@@ -110,13 +113,40 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
         }
     }, [scanNow.isPending, scanTasksFound]);
 
-    const activeTasks = useMemo(
-        () =>
+    const activeTasks = useMemo(() => {
+        const active =
             tasks?.filter(
                 (t) => t.state !== "done" && t.state !== "dismissed",
-            ) ?? [],
-        [tasks],
-    );
+            ) ?? [];
+
+        const statePriority: Record<string, number> = {
+            in_progress: 0,
+            failed: 1,
+            pending: 2,
+            review: 3,
+        };
+
+        return [...active].sort((a, b) => {
+            const aPri = statePriority[a.state] ?? 2;
+            const bPri = statePriority[b.state] ?? 2;
+
+            if (aPri !== bPri) return aPri - bPri;
+
+            // Within pending: queued tasks come before non-queued
+            if (a.state === "pending" && b.state === "pending") {
+                const aQIdx = queue.findIndex((q) => q.taskId === a.id);
+                const bQIdx = queue.findIndex((q) => q.taskId === b.id);
+                const aQueued = aQIdx !== -1;
+                const bQueued = bQIdx !== -1;
+
+                if (aQueued && !bQueued) return -1;
+                if (!aQueued && bQueued) return 1;
+                if (aQueued && bQueued) return aQIdx - bQIdx;
+            }
+
+            return a.sortOrder - b.sortOrder;
+        });
+    }, [tasks, queue]);
 
     const doneTasks = useMemo(
         () =>
@@ -352,28 +382,39 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
                                 items={activeTasks.map((t) => t.id)}
                                 strategy={verticalListSortingStrategy}
                             >
-                                {activeTasks.map((task, idx) => (
-                                    <TaskRow
-                                        key={task.id}
-                                        task={task}
-                                        onClick={() => setSelectedTask(task.id)}
-                                        onMoveUp={() => handleMoveUp(task.id)}
-                                        onMoveDown={() =>
-                                            handleMoveDown(task.id)
-                                        }
-                                        onDelete={() =>
-                                            handleDeleteTask(task.id)
-                                        }
-                                        canMoveUp={idx > 0}
-                                        canMoveDown={
-                                            idx < activeTasks.length - 1
-                                        }
-                                        isActive={hoveredTaskId === task.id}
-                                        onHover={() =>
-                                            setHoveredTaskId(task.id)
-                                        }
-                                    />
-                                ))}
+                                {activeTasks.map((task, idx) => {
+                                    const qIdx = queue.findIndex(
+                                        (q) => q.taskId === task.id,
+                                    );
+                                    return (
+                                        <TaskRow
+                                            key={task.id}
+                                            task={task}
+                                            onClick={() =>
+                                                setSelectedTask(task.id)
+                                            }
+                                            onMoveUp={() =>
+                                                handleMoveUp(task.id)
+                                            }
+                                            onMoveDown={() =>
+                                                handleMoveDown(task.id)
+                                            }
+                                            onDelete={() =>
+                                                handleDeleteTask(task.id)
+                                            }
+                                            canMoveUp={idx > 0}
+                                            canMoveDown={
+                                                idx < activeTasks.length - 1
+                                            }
+                                            isActive={hoveredTaskId === task.id}
+                                            onHover={() =>
+                                                setHoveredTaskId(task.id)
+                                            }
+                                            isQueued={qIdx !== -1}
+                                            queuePosition={qIdx}
+                                        />
+                                    );
+                                })}
                             </SortableContext>
                         </DndContext>
 

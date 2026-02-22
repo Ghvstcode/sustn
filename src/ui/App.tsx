@@ -1,18 +1,23 @@
+import { useEffect } from "react";
 import {
     BrowserRouter as Router,
     Route,
     Routes,
     Navigate,
+    useNavigate,
 } from "react-router-dom";
 import "./App.css";
 import { ThemeProvider } from "@ui/providers/ThemeProvider";
 import { AppProvider } from "@ui/providers/AppProvider";
 import { AppShell } from "@ui/components/layout/AppShell";
+import { SettingsPage } from "@ui/components/settings/SettingsPage";
 import { OnboardingLayout } from "@ui/components/layout/OnboardingLayout";
 import { OnboardingFlow } from "@ui/components/onboarding/OnboardingFlow";
 import { Toaster } from "sonner";
 import { useTheme } from "@ui/hooks/useTheme";
 import { useOnboardingStatus } from "@core/api/useOnboarding";
+import { clearBadge } from "@core/services/notifications";
+import { listen } from "@tauri-apps/api/event";
 import {
     QueryClient,
     QueryClientProvider,
@@ -58,6 +63,26 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function AppContent() {
     const { mode } = useTheme();
+    const navigate = useNavigate();
+
+    // Handle menu bar navigation events from Tauri
+    useEffect(() => {
+        const unlisten = listen<string>("menu-navigate", (event) => {
+            navigate(event.payload);
+        });
+        return () => {
+            void unlisten.then((fn) => fn());
+        };
+    }, [navigate]);
+
+    // Clear dock badge when the window gets focus
+    useEffect(() => {
+        function handleFocus() {
+            void clearBadge();
+        }
+        window.addEventListener("focus", handleFocus);
+        return () => window.removeEventListener("focus", handleFocus);
+    }, []);
 
     const resolvedTheme =
         mode === "system"
@@ -75,6 +100,14 @@ function AppContent() {
                         <OnboardingLayout>
                             <OnboardingFlow />
                         </OnboardingLayout>
+                    }
+                />
+                <Route
+                    path="/settings"
+                    element={
+                        <AuthGuard>
+                            <SettingsPage />
+                        </AuthGuard>
                     }
                 />
                 <Route

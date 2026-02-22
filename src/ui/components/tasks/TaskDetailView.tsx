@@ -17,15 +17,21 @@ import {
     useUpdateTask,
     useDeleteTask,
     useSendMessage,
+    useTaskMessages,
 } from "@core/api/useTasks";
 import { useRepositories } from "@core/api/useRepositories";
 import {
     useStartTask,
+    useEngineStatus,
     usePushBranch,
+    useCreatePr,
     useDiffStat,
     useDiff,
     useTaskEventListeners,
 } from "@core/api/useEngine";
+import { useQueueStore } from "@core/store/queue-store";
+import { useGlobalSettings, useProjectOverrides } from "@core/api/useSettings";
+import { generateBranchName, effectiveBaseBranch } from "@core/utils/branch";
 import { useAppStore } from "@core/store/app-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { TaskState } from "@core/types/task";
@@ -38,6 +44,7 @@ import { TaskDiffViewer } from "./TaskDiffViewer";
 import { TaskChangedFilesSidebar } from "./TaskChangedFilesSidebar";
 import { TaskFilesInvolved } from "./TaskFilesInvolved";
 import { TaskStatusBanner } from "./TaskStatusBanner";
+import { queuedToast } from "@ui/lib/toast";
 import { FileContentViewer } from "./FileContentViewer";
 
 // ── Constants ───────────────────────────────────────────────
@@ -72,12 +79,14 @@ function ChatInput({
     feedbackMode,
     onFeedbackSend,
     onFeedbackCancel,
+    onMessageSent,
 }: {
     taskId: string;
     placeholder?: string;
     feedbackMode?: boolean;
     onFeedbackSend?: (content: string) => void;
     onFeedbackCancel?: () => void;
+    onMessageSent?: () => void;
 }) {
     const [draft, setDraft] = useState("");
     const [isFocused, setIsFocused] = useState(false);
@@ -112,6 +121,7 @@ function ChatInput({
                     if (textareaRef.current) {
                         textareaRef.current.style.height = "auto";
                     }
+                    onMessageSent?.();
                 },
             },
         );
@@ -249,8 +259,17 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     const deleteTask = useDeleteTask();
     const startTask = useStartTask();
     const pushBranch = usePushBranch();
+    const createPr = useCreatePr();
     const sendMessage = useSendMessage();
+    const { data: globalSettings } = useGlobalSettings();
+    const { data: projectOverrides } = useProjectOverrides(task?.repositoryId);
     const setSelectedTask = useAppStore((s) => s.setSelectedTask);
+    const { data: engineStatus } = useEngineStatus();
+    const { data: taskMessages } = useTaskMessages(taskId);
+    const enqueue = useQueueStore((s) => s.enqueue);
+    const removeFromQueue = useQueueStore((s) => s.remove);
+    const isQueued = useQueueStore((s) => s.isQueued(taskId));
+    const queuePosition = useQueueStore((s) => s.queuePosition(taskId));
 
     // ── Tab state (typed) ──
     const [openTabs, setOpenTabs] = useState<FileTab[]>([]);
@@ -258,6 +277,17 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
 
     // ── Feedback mode (Request Changes flow) ──
     const [feedbackMode, setFeedbackMode] = useState(false);
+
+    // ── Scroll ref ──
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const scrollToBottom = useCallback(() => {
+        requestAnimationFrame(() => {
+            scrollRef.current?.scrollTo({
+                top: scrollRef.current.scrollHeight,
+                behavior: "smooth",
+            });
+        });
+    }, []);
 
     // ── Sidebar resize ──
     const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
@@ -291,7 +321,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     const hasBranch = !!task?.branchName && !!baseBranch;
     const showDiff = task?.state === "review" || task?.state === "done";
 
-    const { data: diffStat } = useDiffStat(
+    const { data: diffStat, error: diffStatError } = useDiffStat(
         showDiff && hasBranch ? repoPath : undefined,
         showDiff && hasBranch ? baseBranch : undefined,
         showDiff && hasBranch ? task?.branchName : undefined,
@@ -371,8 +401,9 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
             });
             updateTask.mutate({ id: taskId, state: "pending" as TaskState });
             setFeedbackMode(false);
+            scrollToBottom();
         },
-        [taskId, sendMessage, updateTask],
+        [taskId, sendMessage, updateTask, scrollToBottom],
     );
 
     const handleFeedbackCancel = useCallback(() => {
@@ -403,20 +434,67 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     }
 
     function handleStartWork() {
-        if (!repoPath || !task) return;
-        updateTask.mutate({
-            id: taskId,
-            state: "in_progress" as TaskState,
-            startedAt: new Date().toISOString(),
-        });
-        startTask.mutate({
+        if (!repoPath || !task || !globalSettings) return;
+        const base = effectiveBaseBranch(
+            task.baseBranch,
+            globalSettings,
+            projectOverrides,
+            defaultBranch,
+        );
+        // Reuse existing branch when restarting after "Request Changes"
+        const branch =
+            task.branchName ??
+            generateBranchName(
+                task.title,
+                task.id,
+                globalSettings,
+                projectOverrides,
+            );
+
+        // Collect change request messages to pass as feedback to the agent
+        const changeRequests = taskMessages?.filter(
+            (m) => m.metadata?.type === "change_request",
+        );
+        const changeRequestFeedback =
+            changeRequests && changeRequests.length > 0
+                ? changeRequests.map((m) => m.content).join("\n\n")
+                : undefined;
+
+        // Pass session ID to resume the previous Claude conversation
+        const resumeSessionId = changeRequestFeedback
+            ? task.sessionId
+            : undefined;
+
+        const params = {
             taskId: task.id,
             repositoryId: task.repositoryId,
             repoPath,
             taskTitle: task.title,
             taskDescription: task.description ?? "",
             filesInvolved: task.filesInvolved ?? [],
+            baseBranch: base,
+            branchName: branch,
+            changeRequestFeedback,
+            resumeSessionId,
+        };
+
+        // If another task is running, queue this one instead
+        if (engineStatus?.currentTask) {
+            enqueue(params);
+            queuedToast();
+            return;
+        }
+
+        updateTask.mutate({
+            id: taskId,
+            state: "in_progress" as TaskState,
+            startedAt: new Date().toISOString(),
         });
+        startTask.mutate(params);
+    }
+
+    function handleCancelQueue() {
+        removeFromQueue(taskId);
     }
 
     function handleApproveAndCreatePr() {
@@ -425,15 +503,55 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
             pushBranch.mutate(
                 { repoPath, branchName: task.branchName },
                 {
-                    onSuccess: (result) => {
-                        if (result.success) {
+                    onSuccess: (pushResult) => {
+                        if (!pushResult.success) {
                             sendMessage.mutate({
                                 taskId,
                                 role: "system",
-                                content: `Branch ${task.branchName} pushed to remote. Task approved.`,
+                                content: `Failed to push branch ${task.branchName}: ${pushResult.error ?? "Unknown error"}`,
                             });
+                            return;
                         }
-                        handleUpdateState("done");
+
+                        // Create PR via gh CLI
+                        createPr.mutate(
+                            {
+                                repoPath: repoPath,
+                                branchName: task.branchName!,
+                                baseBranch,
+                                title: task.title,
+                                body: `## Summary\n\n${task.description || task.title}\n\nBranch: \`${task.branchName}\``,
+                            },
+                            {
+                                onSuccess: (pr) => {
+                                    updateTask.mutate({
+                                        id: taskId,
+                                        prUrl: pr.url,
+                                    });
+                                    sendMessage.mutate({
+                                        taskId,
+                                        role: "system",
+                                        content: `Branch pushed and PR created: ${pr.url}`,
+                                    });
+                                    handleUpdateState("done");
+                                },
+                                onError: (err) => {
+                                    sendMessage.mutate({
+                                        taskId,
+                                        role: "system",
+                                        content: `Branch ${task.branchName} pushed to remote. PR creation failed: ${err instanceof Error ? err.message : String(err)}. Create it manually.`,
+                                    });
+                                    handleUpdateState("done");
+                                },
+                            },
+                        );
+                    },
+                    onError: (err) => {
+                        sendMessage.mutate({
+                            taskId,
+                            role: "system",
+                            content: `Failed to push branch ${task.branchName}: ${err instanceof Error ? err.message : String(err)}`,
+                        });
                     },
                 },
             );
@@ -471,7 +589,21 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     let primaryAction: React.ReactNode = null;
     const state = task.state;
 
-    if (state === "pending" && repoPath) {
+    if (state === "pending" && repoPath && isQueued) {
+        primaryAction = (
+            <Button
+                size="sm"
+                variant="outline"
+                className={btnClass}
+                onClick={handleCancelQueue}
+            >
+                <X className="h-3.5 w-3.5" />
+                {queuePosition === 0
+                    ? "Up Next"
+                    : `Queued #${queuePosition + 1}`}
+            </Button>
+        );
+    } else if (state === "pending" && repoPath) {
         primaryAction = (
             <Button
                 size="sm"
@@ -682,7 +814,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                 )}
 
                 {/* Scrollable content */}
-                <div className="flex-1 overflow-y-auto">
+                <div ref={scrollRef} className="flex-1 overflow-y-auto">
                     {isShowingDiff ? (
                         diffText ? (
                             <div className="px-6 pt-4 pb-8">
@@ -765,6 +897,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                 feedbackMode={feedbackMode}
                                 onFeedbackSend={handleFeedbackSend}
                                 onFeedbackCancel={handleFeedbackCancel}
+                                onMessageSent={scrollToBottom}
                             />
                         </div>
                     </div>
@@ -795,6 +928,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                         onBrowseFileSelect={handleBrowseFileSelect}
                         actions={sidebarActions}
                         hasChanges={hasChanges}
+                        diffError={diffStatError ? String(diffStatError) : null}
                     />
                 </div>
             )}

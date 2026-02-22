@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { CSSProperties } from "react";
 import { Plus, Search } from "lucide-react";
 import { useAppStore } from "@core/store/app-store";
+import { useScanNow } from "@core/api/useEngine";
 import { ProjectList } from "./ProjectList";
 import { SidebarFooter } from "./SidebarFooter";
 import { AddProjectDialog } from "./AddProjectDialog";
@@ -13,6 +14,7 @@ interface SidebarProps {
 
 export function Sidebar({ style }: SidebarProps) {
     const setSelectedRepository = useAppStore((s) => s.setSelectedRepository);
+    const scanNow = useScanNow();
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [search, setSearch] = useState("");
 
@@ -83,7 +85,14 @@ export function Sidebar({ style }: SidebarProps) {
             <AddProjectDialog
                 open={isAddDialogOpen}
                 onOpenChange={setIsAddDialogOpen}
-                onSuccess={(repoId) => setSelectedRepository(repoId)}
+                onSuccess={(repoId, repoPath) => {
+                    setSelectedRepository(repoId);
+                    scanNow.mutate({
+                        repoPath,
+                        repositoryId: repoId,
+                        baseBranch: "main",
+                    });
+                }}
             />
         </aside>
     );

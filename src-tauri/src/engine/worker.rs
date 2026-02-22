@@ -14,6 +14,8 @@ pub struct WorkResult {
     pub files_modified: Vec<String>,
     pub summary: Option<String>,
     pub error: Option<String>,
+    /// Claude CLI session ID, used to resume conversation on change requests.
+    pub session_id: Option<String>,
 }
 
 /// Output we expect from the implement phase.
@@ -23,6 +25,9 @@ struct ImplementOutput {
     summary: Option<String>,
     #[allow(dead_code)]
     tests_added: Option<bool>,
+    /// Claude CLI session ID (not from Claude's JSON output — populated after parsing).
+    #[serde(skip)]
+    session_id: Option<String>,
 }
 
 /// Output we expect from the review phase.
@@ -45,10 +50,12 @@ pub async fn execute_task(
     task_description: &str,
     files_involved: &[String],
     max_retries: u32,
+    base_branch: &str,
+    branch_name: &str,
+    change_request_feedback: Option<String>,
+    resume_session_id: Option<String>,
 ) -> WorkResult {
-    println!("[worker] execute_task START — task_id={task_id}, title={task_title}, files={files_involved:?}");
-    let branch_name = git::task_branch_name(task_id);
-    println!("[worker] branch_name={branch_name}");
+    println!("[worker] execute_task START — task_id={task_id}, title={task_title}, base_branch={base_branch}, branch={branch_name}, files={files_involved:?}, has_change_request={}, resume_session={:?}", change_request_feedback.is_some(), resume_session_id);
 
     // Save original branch so we can return to it
     let original_branch = git::current_branch(repo_path);
@@ -64,59 +71,71 @@ pub async fn execute_task(
                 "Could not determine current branch: {:?}",
                 original_branch.error
             )),
+            session_id: None,
         };
     }
     let original_branch_name = original_branch.output.clone();
 
-    // Check for clean working tree
+    // Auto-stash if working tree is dirty (safety net for queue transitions)
     if !git::is_clean(repo_path) {
-        return WorkResult {
-            success: false,
-            phase_reached: TaskPhase::Planning,
-            branch_name: None,
-            commit_sha: None,
-            files_modified: vec![],
-            summary: None,
-            error: Some(
-                "Working tree is not clean. Commit or stash changes first.".to_string(),
-            ),
-        };
+        println!("[worker] dirty working tree — auto-stashing");
+        let stash = git::stash(repo_path);
+        if !stash.success {
+            return WorkResult {
+                success: false,
+                phase_reached: TaskPhase::Planning,
+                branch_name: None,
+                commit_sha: None,
+                files_modified: vec![],
+                summary: None,
+                error: Some(
+                    "Working tree is dirty and auto-stash failed. Commit or stash changes manually.".to_string(),
+                ),
+                session_id: None,
+            };
+        }
     }
 
-    // Create task branch
-    if git::branch_exists(repo_path, &branch_name) {
+    // Create task branch from the specified base branch
+    if git::branch_exists(repo_path, branch_name) {
         // Branch already exists — checkout it
-        let checkout = git::checkout_branch(repo_path, &branch_name);
+        let checkout = git::checkout_branch(repo_path, branch_name);
         if !checkout.success {
             return WorkResult {
                 success: false,
                 phase_reached: TaskPhase::Planning,
-                branch_name: Some(branch_name),
+                branch_name: Some(branch_name.to_string()),
                 commit_sha: None,
                 files_modified: vec![],
                 summary: None,
                 error: Some(format!("Failed to checkout branch: {:?}", checkout.error)),
+                session_id: None,
             };
         }
     } else {
-        let create = git::create_branch(repo_path, &branch_name);
+        let create = git::create_branch_from(repo_path, branch_name, base_branch);
         if !create.success {
             return WorkResult {
                 success: false,
                 phase_reached: TaskPhase::Planning,
-                branch_name: Some(branch_name),
+                branch_name: Some(branch_name.to_string()),
                 commit_sha: None,
                 files_modified: vec![],
                 summary: None,
-                error: Some(format!("Failed to create branch: {:?}", create.error)),
+                error: Some(format!("Failed to create branch from {}: {:?}", base_branch, create.error)),
+                session_id: None,
             };
         }
     }
 
     // Run the implement phase (we skip separate plan phase for now —
     // Claude Code is capable enough to plan inline during implementation)
-    let mut last_feedback: Option<String> = None;
+    // Seed with user's change request feedback so the agent sees it on the first attempt
+    let mut last_feedback: Option<String> = change_request_feedback;
     let mut attempt = 0;
+    // Use resume_session_id only on the first attempt (the user's change request).
+    // Subsequent internal retries start fresh since the context has diverged.
+    let mut current_resume_id = resume_session_id;
 
     loop {
         attempt += 1;
@@ -124,14 +143,16 @@ pub async fn execute_task(
 
         println!("[worker] running implement phase...");
         let implement_result =
-            run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback)
+            run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback, current_resume_id.as_deref())
                 .await;
+        // Only resume on the first attempt
+        current_resume_id = None;
 
         match implement_result {
             Ok(ref impl_output) => {
                 println!(
-                    "[worker] implement phase OK — summary={:?}, files_modified={:?}",
-                    impl_output.summary, impl_output.files_modified
+                    "[worker] implement phase OK — summary={:?}, files_modified={:?}, session_id={:?}",
+                    impl_output.summary, impl_output.files_modified, impl_output.session_id
                 );
             }
             Err(ref e) => {
@@ -172,7 +193,7 @@ pub async fn execute_task(
                         return WorkResult {
                             success: true,
                             phase_reached: TaskPhase::Reviewing,
-                            branch_name: Some(branch_name),
+                            branch_name: Some(branch_name.to_string()),
                             commit_sha: if sha.success {
                                 Some(sha.output)
                             } else {
@@ -183,6 +204,7 @@ pub async fn execute_task(
                                 .unwrap_or_default(),
                             summary: impl_output.summary,
                             error: None,
+                            session_id: impl_output.session_id,
                         };
                     }
                     Ok(review) => {
@@ -195,7 +217,7 @@ pub async fn execute_task(
                             return WorkResult {
                                 success: false,
                                 phase_reached: TaskPhase::Reviewing,
-                                branch_name: Some(branch_name),
+                                branch_name: Some(branch_name.to_string()),
                                 commit_sha: None,
                                 files_modified: vec![],
                                 summary: None,
@@ -204,6 +226,7 @@ pub async fn execute_task(
                                     attempt,
                                     review.feedback.unwrap_or_default()
                                 )),
+                                session_id: impl_output.session_id,
                             };
                         }
                         // Loop continues to retry implementation
@@ -213,11 +236,12 @@ pub async fn execute_task(
                         return WorkResult {
                             success: false,
                             phase_reached: TaskPhase::Reviewing,
-                            branch_name: Some(branch_name),
+                            branch_name: Some(branch_name.to_string()),
                             commit_sha: None,
                             files_modified: vec![],
                             summary: None,
                             error: Some(format!("Review phase failed: {}", e)),
+                            session_id: impl_output.session_id,
                         };
                     }
                 }
@@ -227,11 +251,12 @@ pub async fn execute_task(
                 return WorkResult {
                     success: false,
                     phase_reached: TaskPhase::Implementing,
-                    branch_name: Some(branch_name),
+                    branch_name: Some(branch_name.to_string()),
                     commit_sha: None,
                     files_modified: vec![],
                     summary: None,
                     error: Some(format!("Implementation failed: {}", e)),
+                    session_id: None,
                 };
             }
         }
@@ -245,23 +270,45 @@ async fn run_implement_phase(
     description: &str,
     files_involved: &[String],
     previous_feedback: &Option<String>,
+    resume_session_id: Option<&str>,
 ) -> Result<ImplementOutput, String> {
-    let files_list = if files_involved.is_empty() {
-        "Not specified — analyze the codebase to determine relevant files.".to_string()
+    // When resuming a previous session, use a focused change-request prompt.
+    // The agent already has full context from the original conversation.
+    let prompt = if resume_session_id.is_some() {
+        let feedback = previous_feedback
+            .as_deref()
+            .unwrap_or("Please review and improve your previous implementation.");
+        format!(
+            r#"A reviewer has requested changes to your previous implementation. Address their feedback:
+
+{feedback}
+
+Apply the requested changes, commit them with a clear commit message, and include this trailer: SUSTN-Task: {task_id}
+
+When done, output ONLY this JSON (no markdown, no explanation):
+{{
+  "files_modified": ["list", "of", "files"],
+  "summary": "Brief description of what was changed and why",
+  "tests_added": true or false
+}}"#
+        )
     } else {
-        files_involved.join(", ")
-    };
+        let files_list = if files_involved.is_empty() {
+            "Not specified — analyze the codebase to determine relevant files.".to_string()
+        } else {
+            files_involved.join(", ")
+        };
 
-    let feedback_section = match previous_feedback {
-        Some(fb) => format!(
-            "\n\n## Previous Review Feedback\nYour previous attempt was rejected. Fix these issues:\n{}",
-            fb
-        ),
-        None => String::new(),
-    };
+        let feedback_section = match previous_feedback {
+            Some(fb) => format!(
+                "\n\n## Change Request Feedback\nA reviewer has requested changes to your previous implementation. Address their feedback:\n{}",
+                fb
+            ),
+            None => String::new(),
+        };
 
-    let prompt = format!(
-        r#"You are implementing a code improvement for the SUSTN automated agent.
+        format!(
+            r#"You are implementing a code improvement for the SUSTN automated agent.
 
 ## Task
 Title: {title}
@@ -282,10 +329,11 @@ When done, output ONLY this JSON (no markdown, no explanation):
   "summary": "Brief description of what was changed and why",
   "tests_added": true or false
 }}"#
-    );
+        )
+    };
 
-    println!("[worker:implement] invoking Claude CLI — prompt_len={}", prompt.len());
-    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None).await?;
+    println!("[worker:implement] invoking Claude CLI — prompt_len={}, resume={}", prompt.len(), resume_session_id.is_some());
+    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, resume_session_id).await?;
     println!(
         "[worker:implement] Claude CLI returned — success={}, exit={:?}, stdout_len={}, stderr_len={}",
         result.success, result.exit_code, result.stdout.len(), result.stderr.len()
@@ -299,10 +347,14 @@ When done, output ONLY this JSON (no markdown, no explanation):
         ));
     }
 
+    let cli_session_id = result.session_id.clone();
+
     // Try to parse structured output; fall back to a default if output isn't clean JSON
-    let parsed = parse_implement_output(&result.stdout);
+    let mut parsed = parse_implement_output(&result.stdout)?;
+    // Attach session_id so the caller can persist it for future --resume
+    parsed.session_id = cli_session_id;
     println!("[worker:implement] parsed output: {parsed:?}");
-    parsed
+    Ok(parsed)
 }
 
 async fn run_review_phase(
@@ -333,7 +385,7 @@ Output ONLY this JSON (no markdown, no explanation):
     );
 
     println!("[worker:review] invoking Claude CLI — prompt_len={}", prompt.len());
-    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None).await?;
+    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, None).await?;
     println!(
         "[worker:review] Claude CLI returned — success={}, exit={:?}, stdout_len={}, stderr_len={}",
         result.success, result.exit_code, result.stdout.len(), result.stderr.len()
@@ -388,6 +440,7 @@ fn parse_implement_output(output: &str) -> Result<ImplementOutput, String> {
         files_modified: None,
         summary: Some("Implementation completed (output was not structured JSON)".to_string()),
         tests_added: None,
+        session_id: None,
     })
 }
 

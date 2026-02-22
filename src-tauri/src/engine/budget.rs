@@ -64,23 +64,26 @@ impl Default for BudgetConfig {
     }
 }
 
-/// Find the Claude data directory. Checks both legacy and new locations.
+/// Find the Claude data directory by looking for stats-cache.json.
+/// Checks XDG (~/.config/claude), legacy (~/.claude), and platform config dir.
 pub fn find_claude_data_dir() -> Option<PathBuf> {
-    if let Some(home) = dirs::home_dir() {
-        // New location (Claude Code v1.0.30+)
-        let new_path = dirs::config_dir()
-            .unwrap_or_else(|| home.clone())
-            .join("claude");
-        if new_path.exists() {
-            return Some(new_path);
-        }
+    let home = dirs::home_dir()?;
 
+    let candidates = [
+        // XDG location (Claude Code v1.0.30+)
+        home.join(".config").join("claude"),
         // Legacy location
-        let legacy_path = home.join(".claude");
-        if legacy_path.exists() {
-            return Some(legacy_path);
+        home.join(".claude"),
+        // Platform config dir (e.g. ~/Library/Application Support/claude on macOS)
+        dirs::config_dir().map(|d| d.join("claude")).unwrap_or_default(),
+    ];
+
+    for dir in &candidates {
+        if dir.join("stats-cache.json").exists() {
+            return Some(dir.clone());
         }
     }
+
     None
 }
 

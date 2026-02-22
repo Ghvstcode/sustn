@@ -6,8 +6,12 @@ use crate::engine::{self, budget, db, scanner, scheduler, worker, CurrentTask, E
 
 /// Get the current budget status.
 #[tauri::command]
-pub async fn engine_get_budget() -> Result<budget::BudgetStatus, String> {
-    let config = budget::BudgetConfig::default(); // TODO: read from DB
+pub async fn engine_get_budget(app: AppHandle) -> Result<budget::BudgetStatus, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+    let config = db::read_budget_config(&app_data_dir);
     Ok(budget::calculate_budget_status(&config))
 }
 
@@ -41,7 +45,11 @@ pub async fn engine_scan_now(
 
     // --- Pass 2: Deep scan (background, if budget allows) ---
     if result.success && !result.tasks_found.is_empty() {
-        let config = budget::BudgetConfig::default();
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+        let config = db::read_budget_config(&app_data_dir);
         let status = budget::calculate_budget_status(&config);
 
         if !status.budget_exhausted {
@@ -136,8 +144,31 @@ pub async fn engine_start_task(
     task_title: String,
     task_description: String,
     files_involved: Vec<String>,
+    base_branch: String,
+    branch_name: String,
+    change_request_feedback: Option<String>,
+    resume_session_id: Option<String>,
 ) -> Result<worker::WorkResult, String> {
-    println!("[engine_start_task] invoked — task_id={task_id}, repo_path={repo_path}, title={task_title}");
+    println!("[engine_start_task] invoked — task_id={task_id}, repo_path={repo_path}, title={task_title}, base_branch={base_branch}, branch_name={branch_name}, has_feedback={}, resume_session={:?}", change_request_feedback.is_some(), resume_session_id);
+
+    // Check budget before starting work (respects per-project ceiling override)
+    {
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+        let mut config = db::read_budget_config(&app_data_dir);
+        // Apply per-project ceiling override (may be lower than global)
+        let effective_ceiling = db::read_effective_ceiling_percent(&app_data_dir, &repository_id);
+        if effective_ceiling < config.max_usage_percent {
+            config.max_usage_percent = effective_ceiling;
+        }
+        let status = budget::calculate_budget_status(&config);
+        if status.budget_exhausted {
+            println!("[engine_start_task] BLOCKED — budget exhausted (available={}, ceiling={}%)", status.tokens_available_for_sustn, effective_ceiling);
+            return Err("Budget exhausted — cannot start task".to_string());
+        }
+    }
 
     // Check if a task is already running
     {
@@ -175,6 +206,10 @@ pub async fn engine_start_task(
         &task_description,
         &files_involved,
         2, // max retries
+        &base_branch,
+        &branch_name,
+        change_request_feedback,
+        resume_session_id,
     )
     .await;
 
@@ -289,7 +324,54 @@ pub async fn engine_get_diff_stat(
     base_branch: String,
     head_branch: String,
 ) -> Result<Vec<engine::git::DiffFileStat>, String> {
-    Ok(engine::git::diff_stat(&repo_path, &base_branch, &head_branch))
+    engine::git::diff_stat(&repo_path, &base_branch, &head_branch)
+}
+
+/// Create a pull request using the `gh` CLI.
+#[tauri::command]
+pub async fn engine_create_pr(
+    repo_path: String,
+    branch_name: String,
+    base_branch: String,
+    title: String,
+    body: String,
+) -> Result<PrResult, String> {
+    println!(
+        "[engine_create_pr] creating PR — branch={branch_name}, base={base_branch}, title={title}"
+    );
+
+    let output = std::process::Command::new("gh")
+        .args([
+            "pr",
+            "create",
+            "--base",
+            &base_branch,
+            "--head",
+            &branch_name,
+            "--title",
+            &title,
+            "--body",
+            &body,
+        ])
+        .current_dir(&repo_path)
+        .output()
+        .map_err(|e| format!("Failed to execute gh: {e}"))?;
+
+    if output.status.success() {
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        println!("[engine_create_pr] PR created — url={url}");
+        Ok(PrResult { url })
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        println!("[engine_create_pr] gh pr create failed — {stderr}");
+        Err(format!("gh pr create failed: {stderr}"))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrResult {
+    pub url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
