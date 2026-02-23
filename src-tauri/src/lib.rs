@@ -38,15 +38,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let handle = app.handle();
             let menu = menu::build_menu(handle)?;
             app.set_menu(menu)?;
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                let _ = window.app_handle().exit(0);
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                std::process::exit(0);
             }
         })
         .on_menu_event(|app, event| {

@@ -18,6 +18,8 @@
         "format:check": "prettier --check .",
         "typecheck": "tsc --noEmit",
         "validate": "pnpm lint && pnpm format:check && pnpm typecheck",
+        "bump:patch": "./script/bump_version.sh patch",
+        "bump:minor": "./script/bump_version.sh minor",
         "prepare": "husky"
     },
     "engines": {
@@ -55,6 +57,7 @@
         "@tauri-apps/plugin-shell": "~2",
         "@tauri-apps/plugin-sql": "~2",
         "@tauri-apps/plugin-store": "~2",
+        "@tauri-apps/plugin-updater": "^2.10.0",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "highlight.js": "^11.11.1",

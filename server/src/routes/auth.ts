@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { config } from "../lib/config.js";
+import type { Bindings } from "../lib/config.js";
 import { exchangeCodeForToken, fetchGitHubUser } from "../lib/github.js";
-import { db } from "../db/index.js";
+import { createDb } from "../db/index.js";
 import { users } from "../db/schema.js";
 
-const auth = new Hono();
+const auth = new Hono<{ Bindings: Bindings }>();
 
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const SCOPES = "repo read:user user:email";
@@ -14,8 +14,8 @@ auth.get("/auth/github", (c) => {
     const state = c.req.query("state") ?? "";
 
     const params = new URLSearchParams({
-        client_id: config.github.clientId,
-        redirect_uri: `${config.serverUrl}/auth/callback`,
+        client_id: c.env.GITHUB_CLIENT_ID,
+        redirect_uri: `${c.env.SERVER_URL}/auth/callback`,
         scope: SCOPES,
         state,
     });
@@ -32,8 +32,14 @@ auth.get("/auth/callback", async (c) => {
     }
 
     try {
+        const db = createDb(c.env.DB);
+
         // Exchange code for access token
-        const accessToken = await exchangeCodeForToken(code);
+        const accessToken = await exchangeCodeForToken(
+            code,
+            c.env.GITHUB_CLIENT_ID,
+            c.env.GITHUB_CLIENT_SECRET,
+        );
 
         // Fetch GitHub user profile
         const githubUser = await fetchGitHubUser(accessToken);
@@ -52,7 +58,7 @@ auth.get("/auth/callback", async (c) => {
                     githubUsername: githubUser.login,
                     githubEmail: githubUser.email,
                     githubAvatarUrl: githubUser.avatar_url,
-                    lastLoginAt: new Date(),
+                    lastLoginAt: new Date().toISOString(),
                 })
                 .where(eq(users.githubId, githubUser.id));
         } else {
@@ -65,6 +71,7 @@ auth.get("/auth/callback", async (c) => {
         }
 
         // Redirect to desktop app via deep link
+        const deepLinkScheme = c.env.APP_DEEP_LINK_SCHEME ?? "sustn";
         const deepLinkParams = new URLSearchParams({
             access_token: accessToken,
             github_id: String(githubUser.id),
@@ -77,7 +84,7 @@ auth.get("/auth/callback", async (c) => {
             deepLinkParams.set("email", githubUser.email);
         }
 
-        const deepLink = `${config.appDeepLinkScheme}://auth/callback?${deepLinkParams.toString()}`;
+        const deepLink = `${deepLinkScheme}://auth/callback?${deepLinkParams.toString()}`;
 
         // Return a page that triggers the deep link (better UX than raw redirect)
         return c.html(`<!DOCTYPE html>

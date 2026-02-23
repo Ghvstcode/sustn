@@ -279,7 +279,7 @@ pub fn collect_source_files(repo_path: &str) -> Result<String, String> {
 
 /// Scan a repository using pre-read file context (Pass 1 — fast, ~30-60 seconds).
 /// Files are collected and passed via stdin so Claude doesn't need tool calls.
-pub async fn scan_repository(repo_path: &str) -> ScanResult {
+pub async fn scan_repository(repo_path: &str, scan_preferences: Option<&str>) -> ScanResult {
     // Collect source files
     let file_context = match collect_source_files(repo_path) {
         Ok(ctx) => ctx,
@@ -294,8 +294,12 @@ pub async fn scan_repository(repo_path: &str) -> ScanResult {
     };
 
     // Augment prompt: no tool use, fewer tasks for fast pass 1
+    let scan_focus_section = match scan_preferences {
+        Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Scan Focus\n{prefs}"),
+        _ => String::new(),
+    };
     let augmented_prompt = format!(
-        "{SCAN_PROMPT}\n\n\
+        "{SCAN_PROMPT}{scan_focus_section}\n\n\
         IMPORTANT: The repository source files have been provided to you via stdin. \
         Analyze them directly — do NOT use tools to read additional files.\n\n\
         OVERRIDE: For this quick scan, return only the 3-5 highest-priority tasks. \
@@ -320,6 +324,7 @@ pub async fn scan_repository(repo_path: &str) -> ScanResult {
 pub async fn deep_scan_repository(
     repo_path: &str,
     existing_titles: &[String],
+    scan_preferences: Option<&str>,
 ) -> ScanResult {
     let dedup_list = existing_titles
         .iter()
@@ -327,8 +332,12 @@ pub async fn deep_scan_repository(
         .collect::<Vec<_>>()
         .join("\n");
 
+    let scan_focus_section = match scan_preferences {
+        Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Scan Focus\n{prefs}"),
+        _ => String::new(),
+    };
     let deep_prompt = format!(
-        "{SCAN_PROMPT}\n\n\
+        "{SCAN_PROMPT}{scan_focus_section}\n\n\
         IMPORTANT: The following tasks have already been identified by a quick scan. \
         Do NOT duplicate these — focus on finding issues that require deeper analysis: \
         cross-module problems, subtle bugs, integration issues, things that aren't visible \

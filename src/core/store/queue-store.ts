@@ -9,7 +9,7 @@ export interface QueuedTask {
     filesInvolved: string[];
     baseBranch: string;
     branchName: string;
-    changeRequestFeedback?: string;
+    userMessages?: string;
     resumeSessionId?: string;
 }
 

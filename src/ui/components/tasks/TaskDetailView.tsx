@@ -397,7 +397,6 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                 taskId,
                 role: "user",
                 content,
-                metadata: { type: "change_request" },
             });
             updateTask.mutate({ id: taskId, state: "pending" as TaskState });
             setFeedbackMode(false);
@@ -451,19 +450,16 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                 projectOverrides,
             );
 
-        // Collect change request messages to pass as feedback to the agent
-        const changeRequests = taskMessages?.filter(
-            (m) => m.metadata?.type === "change_request",
-        );
-        const changeRequestFeedback =
-            changeRequests && changeRequests.length > 0
-                ? changeRequests.map((m) => m.content).join("\n\n")
+        // Collect all user messages as context for the agent
+        const allUserMessages = taskMessages?.filter((m) => m.role === "user");
+        const userMessages =
+            allUserMessages && allUserMessages.length > 0
+                ? allUserMessages.map((m) => m.content).join("\n\n")
                 : undefined;
 
-        // Pass session ID to resume the previous Claude conversation
-        const resumeSessionId = changeRequestFeedback
-            ? task.sessionId
-            : undefined;
+        // Resume session if task was previously executed and has user feedback
+        const resumeSessionId =
+            userMessages && task.sessionId ? task.sessionId : undefined;
 
         const params = {
             taskId: task.id,
@@ -474,7 +470,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
             filesInvolved: task.filesInvolved ?? [],
             baseBranch: base,
             branchName: branch,
-            changeRequestFeedback,
+            userMessages,
             resumeSessionId,
         };
 
@@ -485,11 +481,9 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
             return;
         }
 
-        updateTask.mutate({
-            id: taskId,
-            state: "in_progress" as TaskState,
-            startedAt: new Date().toISOString(),
-        });
+        // useStartTask handles persisting in_progress state to DB before
+        // invoking the long-running Rust command (ensures cache invalidations
+        // from deep scan or other sources always refetch the correct state).
         startTask.mutate(params);
     }
 

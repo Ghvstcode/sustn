@@ -52,10 +52,11 @@ pub async fn execute_task(
     max_retries: u32,
     base_branch: &str,
     branch_name: &str,
-    change_request_feedback: Option<String>,
+    user_messages: Option<String>,
     resume_session_id: Option<String>,
+    agent_preferences: Option<&str>,
 ) -> WorkResult {
-    println!("[worker] execute_task START — task_id={task_id}, title={task_title}, base_branch={base_branch}, branch={branch_name}, files={files_involved:?}, has_change_request={}, resume_session={:?}", change_request_feedback.is_some(), resume_session_id);
+    println!("[worker] execute_task START — task_id={task_id}, title={task_title}, base_branch={base_branch}, branch={branch_name}, files={files_involved:?}, has_user_messages={}, resume_session={:?}", user_messages.is_some(), resume_session_id);
 
     // Save original branch so we can return to it
     let original_branch = git::current_branch(repo_path);
@@ -130,8 +131,8 @@ pub async fn execute_task(
 
     // Run the implement phase (we skip separate plan phase for now —
     // Claude Code is capable enough to plan inline during implementation)
-    // Seed with user's change request feedback so the agent sees it on the first attempt
-    let mut last_feedback: Option<String> = change_request_feedback;
+    // Seed with user messages so the agent sees them on the first attempt
+    let mut last_feedback: Option<String> = user_messages;
     let mut attempt = 0;
     // Use resume_session_id only on the first attempt (the user's change request).
     // Subsequent internal retries start fresh since the context has diverged.
@@ -143,7 +144,7 @@ pub async fn execute_task(
 
         println!("[worker] running implement phase...");
         let implement_result =
-            run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback, current_resume_id.as_deref())
+            run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback, current_resume_id.as_deref(), agent_preferences)
                 .await;
         // Only resume on the first attempt
         current_resume_id = None;
@@ -168,6 +169,7 @@ pub async fn execute_task(
                     repo_path,
                     task_title,
                     &impl_output.summary.clone().unwrap_or_default(),
+                    agent_preferences,
                 )
                 .await;
 
@@ -271,19 +273,25 @@ async fn run_implement_phase(
     files_involved: &[String],
     previous_feedback: &Option<String>,
     resume_session_id: Option<&str>,
+    agent_preferences: Option<&str>,
 ) -> Result<ImplementOutput, String> {
-    // When resuming a previous session, use a focused change-request prompt.
+    let prefs_section = match agent_preferences {
+        Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Instructions\n{prefs}"),
+        _ => String::new(),
+    };
+
+    // When resuming a previous session, use a focused prompt.
     // The agent already has full context from the original conversation.
     let prompt = if resume_session_id.is_some() {
         let feedback = previous_feedback
             .as_deref()
             .unwrap_or("Please review and improve your previous implementation.");
         format!(
-            r#"A reviewer has requested changes to your previous implementation. Address their feedback:
+            r#"The user has provided the following feedback on your previous implementation:
 
 {feedback}
 
-Apply the requested changes, commit them with a clear commit message, and include this trailer: SUSTN-Task: {task_id}
+Address the feedback, commit your changes with a clear commit message, and include this trailer: SUSTN-Task: {task_id}
 
 When done, output ONLY this JSON (no markdown, no explanation):
 {{
@@ -301,7 +309,7 @@ When done, output ONLY this JSON (no markdown, no explanation):
 
         let feedback_section = match previous_feedback {
             Some(fb) => format!(
-                "\n\n## Change Request Feedback\nA reviewer has requested changes to your previous implementation. Address their feedback:\n{}",
+                "\n\n## Additional Context from User\n{}",
                 fb
             ),
             None => String::new(),
@@ -315,6 +323,7 @@ Title: {title}
 Description: {description}
 Files involved: {files_list}
 {feedback_section}
+{prefs_section}
 
 ## Instructions
 1. Analyze the issue described above
@@ -361,13 +370,20 @@ async fn run_review_phase(
     repo_path: &str,
     task_title: &str,
     implementation_summary: &str,
+    agent_preferences: Option<&str>,
 ) -> Result<ReviewOutput, String> {
+    let prefs_section = match agent_preferences {
+        Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Instructions\n{prefs}"),
+        _ => String::new(),
+    };
+
     let prompt = format!(
         r#"You are a code reviewer for the SUSTN automated agent. Review the changes made on this branch.
 
 ## Task That Was Implemented
 Title: {task_title}
 Summary of changes: {implementation_summary}
+{prefs_section}
 
 ## Instructions
 Review the uncommitted and recent committed changes on this branch. Check:

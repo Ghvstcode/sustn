@@ -90,9 +90,41 @@ fn read_global_setting_int(conn: &Connection, key: &str) -> Result<i32, rusqlite
     })
 }
 
+/// Read project-specific preferences (agent instructions & scan focus) from `agent_config`.
+/// Returns `(agent_preferences, scan_preferences)` — both optional.
+pub fn read_project_preferences(
+    app_data_dir: &Path,
+    repository_id: &str,
+) -> (Option<String>, Option<String>) {
+    let db_path = app_data_dir.join("sustn.db");
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("[engine] read_project_preferences — failed to open DB: {e}");
+            return (None, None);
+        }
+    };
+
+    conn.query_row(
+        "SELECT agent_preferences, scan_preferences FROM agent_config WHERE repository_id = ?1",
+        [repository_id],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        },
+    )
+    .unwrap_or_else(|_| (None, None))
+}
+
 /// Save scanned tasks directly to the SQLite database from Rust.
 /// Used by Pass 2 (deep scan) which runs in the background and needs
 /// to persist results even if the frontend isn't listening.
+///
+/// Deduplicates against existing task titles (case-insensitive) to avoid
+/// inserting duplicates of tasks that already exist (e.g., from Pass 1 or
+/// previous scans, including tasks that may be in_progress).
 ///
 /// Returns the list of inserted task IDs.
 pub fn save_scanned_tasks(
@@ -105,6 +137,22 @@ pub fn save_scanned_tasks(
         format!("Failed to open database at {}: {e}", db_path.display())
     })?;
 
+    // Load existing task titles for dedup (case-insensitive)
+    let mut existing_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT LOWER(TRIM(title)) FROM tasks WHERE repository_id = ?1")
+            .map_err(|e| format!("Failed to prepare dedup query: {e}"))?;
+        let rows = stmt
+            .query_map([repository_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to query existing titles: {e}"))?;
+        for row in rows {
+            if let Ok(title) = row {
+                existing_titles.insert(title);
+            }
+        }
+    }
+
     // Get the current max sort_order for this repository
     let max_sort: f64 = conn
         .query_row(
@@ -115,10 +163,20 @@ pub fn save_scanned_tasks(
         .unwrap_or(0.0);
 
     let mut inserted_ids = Vec::new();
+    let mut insert_offset = 0usize;
 
-    for (i, task) in tasks.iter().enumerate() {
+    for task in tasks.iter() {
+        let normalized = task.title.to_lowercase().trim().to_string();
+        if existing_titles.contains(&normalized) {
+            println!(
+                "[engine] save_scanned_tasks — skipping duplicate: '{}'",
+                task.title
+            );
+            continue;
+        }
+
         let task_id = uuid::Uuid::new_v4().to_string();
-        let sort_order = max_sort + (i as f64 + 1.0);
+        let sort_order = max_sort + (insert_offset as f64 + 1.0);
         let files_json = serde_json::to_string(&task.files_involved).unwrap_or_default();
 
         conn.execute(
@@ -146,12 +204,15 @@ pub fn save_scanned_tasks(
         )
         .map_err(|e| format!("Failed to insert task event: {e}"))?;
 
+        existing_titles.insert(normalized);
         inserted_ids.push(task_id);
+        insert_offset += 1;
     }
 
     println!(
-        "[engine] save_scanned_tasks — saved {} tasks to DB for repository {repository_id}",
-        inserted_ids.len()
+        "[engine] save_scanned_tasks — saved {} tasks to DB for repository {repository_id} ({} duplicates skipped)",
+        inserted_ids.len(),
+        tasks.len() - inserted_ids.len(),
     );
 
     Ok(inserted_ids)

@@ -182,6 +182,10 @@ export function useScanNow() {
  * Listens for deep scan (Pass 2) completion events from the Rust backend.
  * When a deep scan finishes, tasks are already persisted in the DB —
  * we just need to invalidate the query cache so the UI refreshes.
+ *
+ * Engine-aware: if a task is currently active, we also re-invalidate its
+ * individual query to ensure the detail view stays consistent after the
+ * task list refetch.
  */
 export function useDeepScanListener(repositoryId: string | undefined) {
     const queryClient = useQueryClient();
@@ -202,6 +206,17 @@ export function useDeepScanListener(repositoryId: string | undefined) {
                 void queryClient.invalidateQueries({
                     queryKey: ["tasks", repositoryId],
                 });
+
+                // If a task is actively running, re-invalidate its individual
+                // query so the TaskDetailView stays in sync after the list refetch.
+                const status = queryClient.getQueryData<EngineStatus>([
+                    "engine-status",
+                ]);
+                if (status?.currentTask?.repositoryId === repositoryId) {
+                    void queryClient.invalidateQueries({
+                        queryKey: ["task", status.currentTask.taskId],
+                    });
+                }
 
                 // Notify about new tasks found
                 void getGlobalSettings().then((settings) => {
@@ -322,7 +337,7 @@ interface TaskStartParams {
     filesInvolved: string[];
     baseBranch: string;
     branchName: string;
-    changeRequestFeedback?: string;
+    userMessages?: string;
     resumeSessionId?: string;
 }
 
@@ -520,12 +535,32 @@ export function useStartTask() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: (params: TaskStartParams) => {
+        mutationFn: async (params: TaskStartParams) => {
             console.log(
                 "[useStartTask] invoking engine_start_task command — taskId:",
                 params.taskId,
             );
             metrics.track("agent_run_started", { taskId: params.taskId });
+
+            // Persist in_progress state to DB BEFORE the long-running Rust command.
+            // This guarantees any concurrent cache invalidation (e.g., deep scan
+            // completing) will always refetch the correct state from the DB.
+            await dbUpdateTask(params.taskId, {
+                state: "in_progress" as const,
+                startedAt: new Date().toISOString(),
+            });
+
+            // Immediately propagate to UI so the task shows as in_progress
+            void queryClient.invalidateQueries({
+                queryKey: ["task", params.taskId],
+            });
+            void queryClient.invalidateQueries({
+                queryKey: ["tasks", params.repositoryId],
+            });
+            void queryClient.invalidateQueries({
+                queryKey: ["engine-status"],
+            });
+
             return invoke<WorkResult>("engine_start_task", { ...params });
         },
         onSuccess: (result, variables) =>

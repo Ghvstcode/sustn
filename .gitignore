@@ -48,5 +48,6 @@ web/node_modules
 # Auth server
 server/node_modules
 server/dist
-server/drizzle
 server/.env
+server/.dev.vars
+server/.wrangler

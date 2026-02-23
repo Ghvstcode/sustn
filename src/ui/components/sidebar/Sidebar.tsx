@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { Plus, Search } from "lucide-react";
 import { useAppStore } from "@core/store/app-store";
 import { useScanNow } from "@core/api/useEngine";
+import { useGlobalSettings } from "@core/api/useSettings";
 import { ProjectList } from "./ProjectList";
 import { SidebarFooter } from "./SidebarFooter";
 import { AddProjectDialog } from "./AddProjectDialog";
@@ -15,6 +16,7 @@ interface SidebarProps {
 export function Sidebar({ style }: SidebarProps) {
     const setSelectedRepository = useAppStore((s) => s.setSelectedRepository);
     const scanNow = useScanNow();
+    const { data: globalSettings } = useGlobalSettings();
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [search, setSearch] = useState("");
 
@@ -76,7 +78,7 @@ export function Sidebar({ style }: SidebarProps) {
             </div>
 
             {/* AI Status */}
-            <AiStatusCard />
+            {globalSettings?.showBudgetInSidebar !== false && <AiStatusCard />}
 
             {/* Footer */}
             <SidebarFooter />

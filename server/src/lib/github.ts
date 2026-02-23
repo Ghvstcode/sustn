@@ -1,12 +1,10 @@
-import { config } from "./config.js";
-
 interface GitHubTokenResponse {
     access_token: string;
     token_type: string;
     scope: string;
 }
 
-interface GitHubUser {
+export interface GitHubUser {
     id: number;
     login: string;
     avatar_url: string;
@@ -19,7 +17,11 @@ interface GitHubEmail {
     verified: boolean;
 }
 
-export async function exchangeCodeForToken(code: string): Promise<string> {
+export async function exchangeCodeForToken(
+    code: string,
+    clientId: string,
+    clientSecret: string,
+): Promise<string> {
     const response = await fetch(
         "https://github.com/login/oauth/access_token",
         {
@@ -29,8 +31,8 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
                 Accept: "application/json",
             },
             body: JSON.stringify({
-                client_id: config.github.clientId,
-                client_secret: config.github.clientSecret,
+                client_id: clientId,
+                client_secret: clientSecret,
                 code,
             }),
         },

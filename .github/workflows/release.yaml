@@ -1,0 +1,131 @@
+name: Release
+
+on:
+    workflow_dispatch:
+    push:
+        tags:
+            - "v*"
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    build:
+        strategy:
+            fail-fast: false
+            matrix:
+                architecture:
+                    - aarch64-apple-darwin
+                    - x86_64-apple-darwin
+
+        runs-on: macos-latest
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Install pnpm
+              uses: pnpm/action-setup@v4
+              with:
+                  version: 9
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: "pnpm"
+
+            - name: Install stable Rust toolchain
+              uses: actions-rust-lang/setup-rust-toolchain@v1
+              with:
+                  toolchain: stable
+                  cache: true
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Check formatting
+              run: pnpm format:check
+
+            - name: Run ESLint
+              run: pnpm lint
+
+            - name: Build Tauri binaries for ${{ matrix.architecture }}
+              run: |
+                  rustup target add ${{ matrix.architecture }}
+                  pnpm tauri build --target ${{ matrix.architecture }} --config src-tauri/tauri.conf.json
+              env:
+                  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+                  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+                  APPLE_ID: ${{ secrets.APPLE_ID }}
+                  APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+                  APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+                  APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+                  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+            - name: Upload build artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: artifacts-${{ matrix.architecture }}
+                  path: |
+                      src-tauri/target/${{ matrix.architecture }}/release/bundle/dmg/*.dmg
+                      src-tauri/target/${{ matrix.architecture }}/release/bundle/macos/*.app.tar.gz
+                      src-tauri/target/${{ matrix.architecture }}/release/bundle/macos/*.app.tar.gz.sig
+
+    publish:
+        needs: build
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Download all artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: artifacts
+                  merge-multiple: true
+
+            - name: Generate latest.json
+              run: |
+                  VERSION="${GITHUB_REF_NAME#v}"
+                  DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+                  # Read signature files
+                  AARCH64_SIG=$(cat artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig)
+                  X86_64_SIG=$(cat artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig)
+
+                  # Get filenames
+                  AARCH64_TAR=$(basename artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz)
+                  X86_64_TAR=$(basename artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz)
+
+                  cat > latest.json << EOF
+                  {
+                    "version": "$VERSION",
+                    "pub_date": "$DATE",
+                    "platforms": {
+                      "darwin-aarch64": {
+                        "signature": "$AARCH64_SIG",
+                        "url": "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/${AARCH64_TAR}"
+                      },
+                      "darwin-x86_64": {
+                        "signature": "$X86_64_SIG",
+                        "url": "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/${X86_64_TAR}"
+                      }
+                    }
+                  }
+                  EOF
+
+            - name: Create GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  draft: false
+                  generate_release_notes: true
+                  files: |
+                      artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+                      artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+                      artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+                      artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+                      artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+                      artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+                      latest.json

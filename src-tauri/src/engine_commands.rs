@@ -32,8 +32,15 @@ pub async fn engine_scan_now(
         "repositoryId": repository_id,
     }));
 
+    // Read project-specific scan preferences
+    let app_data_dir_for_prefs = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+    let (_agent_prefs, scan_prefs) = db::read_project_preferences(&app_data_dir_for_prefs, &repository_id);
+
     // --- Pass 1: Quick scan (pre-read files, no tool use) ---
-    let result = scanner::scan_repository(&repo_path).await;
+    let result = scanner::scan_repository(&repo_path, scan_prefs.as_deref()).await;
 
     // Emit pass 1 completed event
     let _ = app.emit("agent:scan-completed", serde_json::json!({
@@ -61,6 +68,7 @@ pub async fn engine_scan_now(
             let app_clone = app.clone();
             let repo_path_clone = repo_path.clone();
             let repo_id_clone = repository_id.clone();
+            let scan_prefs_clone = scan_prefs.clone();
 
             tokio::spawn(async move {
                 println!("[engine] deep scan starting for repository {repo_id_clone}");
@@ -72,6 +80,7 @@ pub async fn engine_scan_now(
                 let deep_result = scanner::deep_scan_repository(
                     &repo_path_clone,
                     &pass1_titles,
+                    scan_prefs_clone.as_deref(),
                 )
                 .await;
 
@@ -146,10 +155,10 @@ pub async fn engine_start_task(
     files_involved: Vec<String>,
     base_branch: String,
     branch_name: String,
-    change_request_feedback: Option<String>,
+    user_messages: Option<String>,
     resume_session_id: Option<String>,
 ) -> Result<worker::WorkResult, String> {
-    println!("[engine_start_task] invoked — task_id={task_id}, repo_path={repo_path}, title={task_title}, base_branch={base_branch}, branch_name={branch_name}, has_feedback={}, resume_session={:?}", change_request_feedback.is_some(), resume_session_id);
+    println!("[engine_start_task] invoked — task_id={task_id}, repo_path={repo_path}, title={task_title}, base_branch={base_branch}, branch_name={branch_name}, has_user_messages={}, resume_session={:?}", user_messages.is_some(), resume_session_id);
 
     // Check budget before starting work (respects per-project ceiling override)
     {
@@ -197,6 +206,15 @@ pub async fn engine_start_task(
         "repositoryId": repository_id,
     }));
 
+    // Read project-specific agent preferences
+    let (agent_prefs, _scan_prefs) = {
+        let app_data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+        db::read_project_preferences(&app_data_dir, &repository_id)
+    };
+
     // Execute the task
     println!("[engine_start_task] calling worker::execute_task — max_retries=2");
     let result = worker::execute_task(
@@ -208,8 +226,9 @@ pub async fn engine_start_task(
         2, // max retries
         &base_branch,
         &branch_name,
-        change_request_feedback,
+        user_messages,
         resume_session_id,
+        agent_prefs.as_deref(),
     )
     .await;
 

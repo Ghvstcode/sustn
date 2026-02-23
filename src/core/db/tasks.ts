@@ -459,22 +459,6 @@ export async function listMessages(taskId: string): Promise<TaskMessage[]> {
     return rows.map(rowToTaskMessage);
 }
 
-export async function getMessagesForPrompt(taskId: string): Promise<string> {
-    const messages = await listMessages(taskId);
-    if (messages.length === 0) return "";
-    return messages
-        .map((m) => {
-            const label =
-                m.role === "user"
-                    ? "User"
-                    : m.role === "agent"
-                      ? "Agent"
-                      : "System";
-            return `[${label}] ${m.content}`;
-        })
-        .join("\n");
-}
-
 /**
  * Get the next pending task for a repository, ordered by sort_order (priority).
  * Returns undefined if no pending tasks exist.

@@ -1,24 +1,11 @@
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { db } from "../db/index.js";
+import type { Bindings } from "../lib/config.js";
+import { createDb } from "../db/index.js";
 import { users, metricEvents } from "../db/schema.js";
 import { fetchGitHubUser } from "../lib/github.js";
 
-const metrics = new Hono();
-
-async function resolveUserId(token: string): Promise<number | null> {
-    try {
-        const ghUser = await fetchGitHubUser(token);
-        const rows = await db
-            .select({ id: users.id })
-            .from(users)
-            .where(eq(users.githubId, ghUser.id))
-            .limit(1);
-        return rows.length > 0 ? rows[0].id : null;
-    } catch {
-        return null;
-    }
-}
+const metrics = new Hono<{ Bindings: Bindings }>();
 
 interface MetricEvent {
     eventType: string;
@@ -32,8 +19,23 @@ metrics.post("/metrics/events", async (c) => {
         return c.json({ error: "Unauthorized" }, 401);
     }
 
+    const db = createDb(c.env.DB);
     const token = authHeader.slice(7);
-    const userId = await resolveUserId(token);
+
+    // Resolve user from token
+    let userId: number | null = null;
+    try {
+        const ghUser = await fetchGitHubUser(token);
+        const rows = await db
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.githubId, ghUser.id))
+            .limit(1);
+        userId = rows.length > 0 ? rows[0].id : null;
+    } catch {
+        userId = null;
+    }
+
     if (!userId) {
         return c.json({ error: "Unauthorized" }, 401);
     }
@@ -50,8 +52,8 @@ metrics.post("/metrics/events", async (c) => {
         events.map((e) => ({
             userId,
             eventType: e.eventType,
-            eventData: e.eventData ?? null,
-            clientTimestamp: new Date(e.clientTimestamp),
+            eventData: e.eventData ? JSON.stringify(e.eventData) : null,
+            clientTimestamp: new Date(e.clientTimestamp).toISOString(),
         })),
     );
 

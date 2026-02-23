@@ -102,6 +102,12 @@ export default function Home() {
                     </a>
                     <div className="flex items-center gap-6">
                         <a
+                            href="/changelog"
+                            className="text-sm text-gray-400 hover:text-black transition-colors hidden sm:block"
+                        >
+                            Changelog
+                        </a>
+                        <a
                             href="/docs"
                             className="text-sm text-gray-400 hover:text-black transition-colors hidden sm:block"
                         >
@@ -374,6 +380,12 @@ export default function Home() {
                         {new Date().getFullYear()} sustn
                     </div>
                     <div className="flex gap-8 text-gray-500">
+                        <a
+                            href="/changelog"
+                            className="hover:text-black transition-colors font-medium"
+                        >
+                            Changelog
+                        </a>
                         <a
                             href="/docs"
                             className="hover:text-black transition-colors font-medium"
