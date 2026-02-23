@@ -58,6 +58,7 @@ export async function fetchGitHubUser(
         headers: {
             Authorization: `Bearer ${accessToken}`,
             Accept: "application/vnd.github+json",
+            "User-Agent": "sustn-server",
         },
     });
 
@@ -75,6 +76,7 @@ export async function fetchGitHubUser(
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
                     Accept: "application/vnd.github+json",
+                    "User-Agent": "sustn-server",
                 },
             },
         );
