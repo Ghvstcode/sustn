@@ -1,6 +1,6 @@
 name = "sustn-server"
 main = "src/index.ts"
-compatibility_date = "2024-12-01"
+compatibility_date = "2025-01-01"
 
 [vars]
 APP_DEEP_LINK_SCHEME = "sustn"
