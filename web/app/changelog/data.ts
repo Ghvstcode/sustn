@@ -16,6 +16,16 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
     {
+        version: "0.1.1",
+        date: "Feb 24th, 2026",
+        title: "Preflight Fix",
+        description:
+            "Fixes preflight environment checks when running as a macOS app.",
+        fixes: [
+            "Claude Code, Git, and GitHub CLI preflight checks now resolve binaries from well-known install paths instead of relying on shell `PATH`, fixing false negatives when launched outside a terminal",
+        ],
+    },
+    {
         version: "0.1.0",
         date: "Feb 24th, 2026",
         title: "Initial Beta Release",
