@@ -1,4 +1,5 @@
 import { Reveal } from "./components/reveal";
+import { DownloadDropdown } from "./components/download-dropdown";
 
 function Logo({
     size = 20,
@@ -119,18 +120,18 @@ export default function Home() {
                         >
                             How it works
                         </a>
-                        <a
-                            href="#download"
+                        <DownloadDropdown
+                            align="right"
                             className="text-sm bg-black text-white font-medium px-3.5 py-1.5 rounded-lg hover:bg-gray-800 transition-colors mono"
                         >
                             Download
-                        </a>
+                        </DownloadDropdown>
                     </div>
                 </div>
             </nav>
 
             {/* ─── Hero ─── */}
-            <header className="pt-32 sm:pt-40 pb-16 sm:pb-20 px-6 sm:px-16">
+            <header className="relative z-10 pt-32 sm:pt-40 pb-16 sm:pb-20 px-6 sm:px-16">
                 <div className="max-w-3xl mx-auto flex flex-col items-center text-center">
                     {/* Logo */}
                     <div className="animate-fade-in-up mb-8">
@@ -156,10 +157,7 @@ export default function Home() {
 
                     {/* CTAs - Conductor style */}
                     <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-md animate-fade-in-up delay-300">
-                        <a
-                            href="#download"
-                            className="bg-black text-white font-semibold text-sm px-5 py-3 rounded-lg hover:bg-gray-800 transition-colors mono inline-flex items-center justify-between gap-2"
-                        >
+                        <DownloadDropdown className="bg-black text-white font-semibold text-sm px-5 py-3 rounded-lg hover:bg-gray-800 transition-colors mono inline-flex items-center justify-between gap-2 w-full">
                             Download for Mac
                             <svg
                                 className="w-4 h-4"
@@ -174,7 +172,7 @@ export default function Home() {
                                     d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                                 />
                             </svg>
-                        </a>
+                        </DownloadDropdown>
                         <a
                             href="/docs"
                             className="border border-gray-200 bg-white text-black font-semibold text-sm px-5 py-3 rounded-lg hover:bg-gray-50 transition-colors mono inline-flex items-center justify-between gap-2"
@@ -204,7 +202,7 @@ export default function Home() {
                     <div className="relative w-full max-w-3xl mx-auto">
                         <div className="relative pb-[56.25%] h-0 overflow-hidden rounded-lg shadow-lg">
                             <iframe
-                                src="https://www.loom.com/embed/e04adf49863f417a9b71864fc1b5574b"
+                                src="https://www.loom.com/embed/c845cfd02d2b4d449637c4938bf03a4b"
                                 className="absolute top-0 left-0 w-full h-full border-0"
                                 allowFullScreen={true}
                                 title="SUSTN Demo Video"
@@ -350,10 +348,7 @@ export default function Home() {
                         tools you already have. No extra infrastructure
                         required.
                     </p>
-                    <a
-                        href="#"
-                        className="bg-black text-white px-8 py-4 rounded-lg font-semibold text-lg hover:bg-gray-800 transition-colors inline-flex items-center gap-3 mono"
-                    >
+                    <DownloadDropdown className="bg-black text-white px-8 py-4 rounded-lg font-semibold text-lg hover:bg-gray-800 transition-colors inline-flex items-center gap-3 mono">
                         Get Started
                         <svg
                             className="w-5 h-5"
@@ -368,7 +363,7 @@ export default function Home() {
                                 d="M17 8l4 4m0 0l-4 4m4-4H3"
                             />
                         </svg>
-                    </a>
+                    </DownloadDropdown>
                 </div>
             </section>
 

@@ -76,6 +76,12 @@ pub fn latest_commit_sha(cwd: &str) -> GitResult {
     run_git(cwd, &["rev-parse", "HEAD"])
 }
 
+/// Check if the current branch has any commits ahead of the given base branch.
+pub fn has_commits_ahead(cwd: &str, base_branch: &str) -> bool {
+    let result = run_git(cwd, &["rev-list", "--count", &format!("{base_branch}..HEAD")]);
+    result.success && result.output.trim().parse::<u32>().unwrap_or(0) > 0
+}
+
 /// Check if a branch exists locally.
 pub fn branch_exists(cwd: &str, branch_name: &str) -> bool {
     let result = run_git(

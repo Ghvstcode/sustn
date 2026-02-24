@@ -70,6 +70,40 @@ fn extract_session_id(stdout: &str) -> Option<String> {
         .and_then(|v| v.get("session_id")?.as_str().map(|s| s.to_string()))
 }
 
+/// Resolve the full path to the `claude` CLI binary.
+///
+/// When running inside a macOS .app bundle, the process does not inherit the
+/// user's shell PATH, so a bare `Command::new("claude")` fails with ENOENT.
+/// We check well-known install locations and fall back to PATH as a last resort.
+fn resolve_claude_binary() -> String {
+    use std::path::PathBuf;
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".to_string());
+
+    let candidates: Vec<PathBuf> = vec![
+        // Homebrew Apple Silicon
+        PathBuf::from("/opt/homebrew/bin/claude"),
+        // Homebrew Intel
+        PathBuf::from("/usr/local/bin/claude"),
+        // Claude Code's own install location
+        PathBuf::from(format!("{}/.claude/bin/claude", home)),
+        // npm global
+        PathBuf::from(format!("{}/.npm-global/bin/claude", home)),
+    ];
+
+    for candidate in &candidates {
+        if candidate.exists() {
+            let path = candidate.to_string_lossy().to_string();
+            println!("[engine] resolved claude binary: {path}");
+            return path;
+        }
+    }
+
+    // Fall back to bare name (works when launched from a terminal with correct PATH)
+    println!("[engine] claude binary not found at known paths, falling back to bare 'claude'");
+    "claude".to_string()
+}
+
 /// Invoke Claude Code CLI with the given prompt in the given working directory.
 /// This is the core primitive that both scanner and worker use.
 ///
@@ -104,7 +138,8 @@ pub async fn invoke_claude_cli(
 
     let has_stdin = stdin_content.is_some();
 
-    let mut cmd = Command::new("claude");
+    let claude_bin = resolve_claude_binary();
+    let mut cmd = Command::new(&claude_bin);
     cmd.args([
         "--print",
         "--output-format",

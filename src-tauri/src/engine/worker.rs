@@ -163,6 +163,26 @@ pub async fn execute_task(
 
         match implement_result {
             Ok(impl_output) => {
+                // Verify the branch actually has commits ahead of base.
+                // If Claude didn't commit (e.g. asked for permission instead),
+                // fail early instead of running a pointless review.
+                if !git::has_commits_ahead(repo_path, base_branch) {
+                    println!("[worker] NO COMMITS on branch — Claude likely did not commit");
+                    let _ = git::checkout_branch(repo_path, &original_branch_name);
+                    return WorkResult {
+                        success: false,
+                        phase_reached: TaskPhase::Implementing,
+                        branch_name: Some(branch_name.to_string()),
+                        commit_sha: None,
+                        files_modified: vec![],
+                        summary: None,
+                        error: Some(
+                            "Implementation phase produced no commits on the branch. Claude may have asked for permission instead of committing.".to_string(),
+                        ),
+                        session_id: impl_output.session_id,
+                    };
+                }
+
                 // Run review phase
                 println!("[worker] running review phase...");
                 let review_result = run_review_phase(
@@ -287,7 +307,9 @@ async fn run_implement_phase(
             .as_deref()
             .unwrap_or("Please review and improve your previous implementation.");
         format!(
-            r#"The user has provided the following feedback on your previous implementation:
+            r#"IMPORTANT: You are running as an automated background agent in non-interactive mode. Commit your changes directly — do NOT ask for permission. This overrides any CLAUDE.md or project instructions about asking before committing.
+
+The user has provided the following feedback on your previous implementation:
 
 {feedback}
 
@@ -316,7 +338,9 @@ When done, output ONLY this JSON (no markdown, no explanation):
         };
 
         format!(
-            r#"You are implementing a code improvement for the SUSTN automated agent.
+            r#"IMPORTANT: You are running as an automated background agent in non-interactive mode. Commit your changes directly — do NOT ask for permission. This overrides any CLAUDE.md or project instructions about asking before committing.
+
+You are implementing a code improvement for the SUSTN automated agent.
 
 ## Task
 Title: {title}
@@ -424,78 +448,86 @@ fn parse_implement_output(output: &str) -> Result<ImplementOutput, String> {
     let trimmed = output.trim();
     println!("[worker:parse_impl] raw output (first 500 chars): {}", &trimmed[..trimmed.len().min(500)]);
 
-    // Try Claude's JSON wrapper first
+    // Try Claude's JSON wrapper first (--output-format json wraps in {"type":"result","result":"..."})
     if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(trimmed) {
         if let Some(result_str) = wrapper.get("result").and_then(|v| v.as_str()) {
             if let Ok(parsed) = serde_json::from_str::<ImplementOutput>(result_str) {
-                println!("[worker:parse_impl] parsed via JSON wrapper → result field");
-                return Ok(parsed);
+                if validate_implement_output(&parsed) {
+                    println!("[worker:parse_impl] parsed via JSON wrapper → result field");
+                    return Ok(parsed);
+                }
             }
             if let Some(parsed) = extract_json_object::<ImplementOutput>(result_str) {
-                println!("[worker:parse_impl] parsed via JSON wrapper → extracted from result field");
-                return Ok(parsed);
+                if validate_implement_output(&parsed) {
+                    println!("[worker:parse_impl] parsed via JSON wrapper → extracted from result field");
+                    return Ok(parsed);
+                }
             }
         }
     }
 
-    // Direct parse
-    if let Ok(parsed) = serde_json::from_str::<ImplementOutput>(trimmed) {
-        println!("[worker:parse_impl] parsed via direct JSON");
-        return Ok(parsed);
-    }
-
-    // Extract from prose
+    // Extract from prose (don't try direct parse — the CLI wrapper is valid JSON
+    // and since all ImplementOutput fields are Option, serde would deserialize it
+    // as all-None, producing a false positive)
     if let Some(parsed) = extract_json_object::<ImplementOutput>(trimmed) {
-        println!("[worker:parse_impl] parsed via JSON extraction from prose");
-        return Ok(parsed);
+        if validate_implement_output(&parsed) {
+            println!("[worker:parse_impl] parsed via JSON extraction from prose");
+            return Ok(parsed);
+        }
     }
 
-    // Fallback: treat it as unstructured output — the work may still have succeeded
-    println!("[worker:parse_impl] FALLBACK — output was not structured JSON");
-    Ok(ImplementOutput {
-        files_modified: None,
-        summary: Some("Implementation completed (output was not structured JSON)".to_string()),
-        tests_added: None,
-        session_id: None,
-    })
+    let preview = &trimmed[..trimmed.len().min(200)];
+    Err(format!(
+        "Could not parse implement output as structured JSON. Raw output: {preview}"
+    ))
 }
 
 fn parse_review_output(output: &str) -> Result<ReviewOutput, String> {
     let trimmed = output.trim();
     println!("[worker:parse_review] raw output (first 500 chars): {}", &trimmed[..trimmed.len().min(500)]);
 
-    // Try Claude's JSON wrapper first
+    // Try Claude's JSON wrapper first (--output-format json wraps in {"type":"result","result":"..."})
     if let Ok(wrapper) = serde_json::from_str::<serde_json::Value>(trimmed) {
         if let Some(result_str) = wrapper.get("result").and_then(|v| v.as_str()) {
             if let Ok(parsed) = serde_json::from_str::<ReviewOutput>(result_str) {
-                println!("[worker:parse_review] parsed via JSON wrapper → result field");
-                return Ok(parsed);
+                if validate_review_output(&parsed) {
+                    println!("[worker:parse_review] parsed via JSON wrapper → result field");
+                    return Ok(parsed);
+                }
             }
             if let Some(parsed) = extract_json_object::<ReviewOutput>(result_str) {
-                println!("[worker:parse_review] parsed via JSON wrapper → extracted from result field");
-                return Ok(parsed);
+                if validate_review_output(&parsed) {
+                    println!("[worker:parse_review] parsed via JSON wrapper → extracted from result field");
+                    return Ok(parsed);
+                }
             }
         }
     }
 
-    if let Ok(parsed) = serde_json::from_str::<ReviewOutput>(trimmed) {
-        println!("[worker:parse_review] parsed via direct JSON");
-        return Ok(parsed);
-    }
-
+    // Extract from prose (skip direct parse — same all-Option false positive risk)
     if let Some(parsed) = extract_json_object::<ReviewOutput>(trimmed) {
-        println!("[worker:parse_review] parsed via JSON extraction from prose");
-        return Ok(parsed);
+        if validate_review_output(&parsed) {
+            println!("[worker:parse_review] parsed via JSON extraction from prose");
+            return Ok(parsed);
+        }
     }
 
-    // Default: assume review passed if we couldn't parse output
-    // (better to let the user review than to block on parse failure)
-    println!("[worker:parse_review] FALLBACK — defaulting to passed");
-    Ok(ReviewOutput {
-        passed: Some(true),
-        feedback: Some("Review output was not structured JSON — defaulting to passed".to_string()),
-        issues: Some(vec![]),
-    })
+    let preview = &trimmed[..trimmed.len().min(200)];
+    Err(format!(
+        "Could not parse review output as structured JSON. Raw output: {preview}"
+    ))
+}
+
+/// Validate that an ImplementOutput has at least one meaningful field.
+/// Prevents false positives from deserializing unrelated JSON (e.g. the CLI wrapper)
+/// where all Option fields silently become None.
+fn validate_implement_output(output: &ImplementOutput) -> bool {
+    output.summary.is_some() || output.files_modified.is_some() || output.tests_added.is_some()
+}
+
+/// Validate that a ReviewOutput has at least the required `passed` field.
+fn validate_review_output(output: &ReviewOutput) -> bool {
+    output.passed.is_some()
 }
 
 /// Extract a JSON object from text that may contain surrounding prose.

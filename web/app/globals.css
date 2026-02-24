@@ -99,6 +99,20 @@ body {
     animation: scroll-left 40s linear infinite;
 }
 
+@keyframes dropdown-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+.animate-dropdown {
+    animation: dropdown-in 0.15s ease-out;
+}
+
 .delay-75 {
     animation-delay: 75ms;
 }
