@@ -84,7 +84,9 @@ jobs:
               uses: actions/download-artifact@v4
               with:
                   path: artifacts
-                  merge-multiple: true
+
+            - name: Debug artifact structure
+              run: find artifacts -type f | head -30
 
             - name: Generate latest.json
               run: |
@@ -92,12 +94,12 @@ jobs:
                   DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
                   # Read signature files
-                  AARCH64_SIG=$(cat artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig)
-                  X86_64_SIG=$(cat artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig)
+                  AARCH64_SIG=$(cat artifacts/artifacts-aarch64-apple-darwin/macos/*.app.tar.gz.sig)
+                  X86_64_SIG=$(cat artifacts/artifacts-x86_64-apple-darwin/macos/*.app.tar.gz.sig)
 
                   # Get filenames
-                  AARCH64_TAR=$(basename artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz)
-                  X86_64_TAR=$(basename artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz)
+                  AARCH64_TAR=$(basename artifacts/artifacts-aarch64-apple-darwin/macos/*.app.tar.gz)
+                  X86_64_TAR=$(basename artifacts/artifacts-x86_64-apple-darwin/macos/*.app.tar.gz)
 
                   cat > latest.json << EOF
                   {
@@ -122,10 +124,10 @@ jobs:
                   draft: false
                   generate_release_notes: true
                   files: |
-                      artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-                      artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-                      artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
-                      artifacts/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
-                      artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
-                      artifacts/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+                      artifacts/artifacts-aarch64-apple-darwin/dmg/*.dmg
+                      artifacts/artifacts-x86_64-apple-darwin/dmg/*.dmg
+                      artifacts/artifacts-aarch64-apple-darwin/macos/*.app.tar.gz
+                      artifacts/artifacts-aarch64-apple-darwin/macos/*.app.tar.gz.sig
+                      artifacts/artifacts-x86_64-apple-darwin/macos/*.app.tar.gz
+                      artifacts/artifacts-x86_64-apple-darwin/macos/*.app.tar.gz.sig
                       latest.json
