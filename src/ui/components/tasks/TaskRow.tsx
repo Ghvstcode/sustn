@@ -8,6 +8,7 @@ import {
     Loader2,
     GitPullRequest,
     XCircle,
+    AlertCircle,
     Pencil,
     MessageSquare,
     Clock,
@@ -48,6 +49,7 @@ const categoryLabels: Record<string, string> = {
 const statePrefix: Record<string, string | undefined> = {
     pending: undefined,
     in_progress: "In-Progress",
+    failed: "Failed",
     review: "Awaiting Review",
     done: "Done",
     dismissed: "Dismissed",
@@ -154,6 +156,16 @@ export function TaskRow({
                         className="group/circle shrink-0"
                     >
                         <Loader2 className="h-4 w-4 text-blue-500 animate-spin transition-colors group-hover/circle:text-green-500 group-hover/circle:animate-none" />
+                    </button>
+                );
+            case "failed":
+                return (
+                    <button
+                        type="button"
+                        onClick={handleToggleDone}
+                        className="group/circle shrink-0"
+                    >
+                        <AlertCircle className="h-4 w-4 text-red-500 transition-colors group-hover/circle:text-green-500" />
                     </button>
                 );
             case "review":

@@ -70,8 +70,15 @@ pub async fn engine_scan_now(
             let repo_id_clone = repository_id.clone();
             let scan_prefs_clone = scan_prefs.clone();
 
+            // Access shared engine state to coordinate with task execution
+            let engine_state: tauri::State<'_, Arc<EngineState>> = app.state();
+            let engine_state_clone = Arc::clone(&engine_state);
+
             tokio::spawn(async move {
                 println!("[engine] deep scan starting for repository {repo_id_clone}");
+
+                // Mark this repo as deep-scanning so engine_start_task can wait
+                engine_state_clone.deep_scanning_repos.lock().await.insert(repo_id_clone.clone());
 
                 let _ = app_clone.emit("agent:scan-deep-started", serde_json::json!({
                     "repositoryId": repo_id_clone,
@@ -94,6 +101,7 @@ pub async fn engine_scan_now(
                                 "repositoryId": repo_id_clone,
                                 "error": format!("Failed to get app data dir: {e}"),
                             }));
+                            engine_state_clone.deep_scanning_repos.lock().await.remove(&repo_id_clone);
                             return;
                         }
                     };
@@ -133,6 +141,10 @@ pub async fn engine_scan_now(
                         "taskIds": serde_json::Value::Array(vec![]),
                     }));
                 }
+
+                // Clear deep-scanning flag so waiting tasks can proceed
+                engine_state_clone.deep_scanning_repos.lock().await.remove(&repo_id_clone);
+                println!("[engine] deep scan flag cleared for repository {repo_id_clone}");
             });
         } else {
             println!("[engine] deep scan skipped — budget exhausted");
@@ -159,6 +171,31 @@ pub async fn engine_start_task(
     resume_session_id: Option<String>,
 ) -> Result<worker::WorkResult, String> {
     println!("[engine_start_task] invoked — task_id={task_id}, repo_path={repo_path}, title={task_title}, base_branch={base_branch}, branch_name={branch_name}, has_user_messages={}, resume_session={:?}", user_messages.is_some(), resume_session_id);
+
+    // Wait for any active deep scan on this repo to finish.
+    // Running two Claude CLI instances in the same repo concurrently causes
+    // git conflicts and unpredictable behavior.
+    {
+        let mut waited = false;
+        loop {
+            let is_scanning = state.deep_scanning_repos.lock().await.contains(&repository_id);
+            if !is_scanning {
+                break;
+            }
+            if !waited {
+                println!("[engine_start_task] waiting for deep scan to finish on {repository_id}...");
+                let _ = app.emit("agent:task-waiting-for-scan", serde_json::json!({
+                    "taskId": task_id,
+                    "repositoryId": repository_id,
+                }));
+                waited = true;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        if waited {
+            println!("[engine_start_task] deep scan finished, proceeding with task {task_id}");
+        }
+    }
 
     // Check budget before starting work (respects per-project ceiling override)
     {

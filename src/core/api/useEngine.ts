@@ -362,6 +362,32 @@ function invalidateTaskQueries(
     });
 }
 
+/** Retry a DB write with a short delay. Prevents tasks getting permanently
+ *  stuck as in_progress when a transient SQLITE_BUSY error occurs. */
+async function dbUpdateTaskWithRetry(
+    taskId: string,
+    fields: Parameters<typeof dbUpdateTask>[1],
+    retries = 2,
+): Promise<void> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            await dbUpdateTask(taskId, fields);
+            return;
+        } catch (e) {
+            console.error(
+                `[dbUpdateTaskWithRetry] attempt ${attempt + 1}/${retries + 1} failed:`,
+                e,
+            );
+            if (attempt < retries) {
+                await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+            }
+        }
+    }
+    console.error(
+        `[dbUpdateTaskWithRetry] all ${retries + 1} attempts failed for task ${taskId}`,
+    );
+}
+
 async function handleTaskResult(
     result: WorkResult,
     variables: TaskStartParams,
@@ -421,7 +447,7 @@ async function handleTaskResult(
                 }
             }
 
-            await dbUpdateTask(variables.taskId, {
+            await dbUpdateTaskWithRetry(variables.taskId, {
                 state: prUrl ? ("done" as const) : ("review" as const),
                 baseBranch: variables.baseBranch,
                 branchName: result.branchName,
@@ -448,7 +474,7 @@ async function handleTaskResult(
                 "[handleTaskResult] persisting failure — error:",
                 result.error,
             );
-            await dbUpdateTask(variables.taskId, {
+            await dbUpdateTaskWithRetry(variables.taskId, {
                 state: "failed" as const,
                 lastError: result.error ?? "Unknown error",
                 branchName: result.branchName,
@@ -495,14 +521,10 @@ async function handleTaskError(
         success: false,
     });
 
-    try {
-        await dbUpdateTask(variables.taskId, {
-            state: "failed" as const,
-            lastError: error instanceof Error ? error.message : String(error),
-        });
-    } catch (e) {
-        console.error("[handleTaskError] failed to persist error state:", e);
-    }
+    await dbUpdateTaskWithRetry(variables.taskId, {
+        state: "failed" as const,
+        lastError: error instanceof Error ? error.message : String(error),
+    });
 
     if (notify) {
         try {
@@ -898,17 +920,20 @@ export function useDiff(
 
 // ── Startup Recovery ────────────────────────────────────────
 
+// Module-level flag so it survives AppShell unmount/remount cycles
+// (e.g. navigating to /settings and back). Only resets on true app restart.
+let startupRecovered = false;
+
 /**
  * Recovers stale in_progress tasks on app startup.
  * Call once from the top-level app shell.
  */
 export function useStartupRecovery() {
     const queryClient = useQueryClient();
-    const recovered = useRef(false);
 
     useEffect(() => {
-        if (recovered.current) return;
-        recovered.current = true;
+        if (startupRecovered) return;
+        startupRecovered = true;
 
         void recoverStaleTasks().then((count) => {
             if (count > 0) {
@@ -926,6 +951,9 @@ export function useStartupRecovery() {
 
 // ── Startup Scan ────────────────────────────────────────────
 
+// Module-level flag — same rationale as startupRecovered above.
+let startupScanStarted = false;
+
 /**
  * Scans repositories that have never been scanned on app startup.
  * Runs once, staggering scans to avoid overloading the system.
@@ -933,11 +961,10 @@ export function useStartupRecovery() {
  */
 export function useStartupScan() {
     const queryClient = useQueryClient();
-    const started = useRef(false);
 
     useEffect(() => {
-        if (started.current) return;
-        started.current = true;
+        if (startupScanStarted) return;
+        startupScanStarted = true;
 
         void runStartupScans(queryClient);
     }, [queryClient]);

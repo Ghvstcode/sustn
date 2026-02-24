@@ -58,7 +58,7 @@ If you'd prefer to build locally:
 **Prerequisites:** Node.js >= 22, Rust (stable), pnpm
 
 ```bash
-git clone https://github.com/user/sustn.git
+git clone https://github.com/ghvstcode/sustn.git
 cd sustn
 pnpm install
 pnpm tauri:dev

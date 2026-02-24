@@ -7,6 +7,7 @@ pub mod scheduler;
 pub mod worker;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
@@ -18,6 +19,10 @@ pub struct EngineState {
     pub current_task: Mutex<Option<CurrentTask>>,
     /// Handle to cancel the scheduler loop.
     pub cancel_token: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    /// Repository IDs that currently have a deep scan in progress.
+    /// Task execution waits for the scan to finish before starting,
+    /// preventing concurrent Claude CLI instances in the same repo.
+    pub deep_scanning_repos: Mutex<HashSet<String>>,
 }
 
 impl EngineState {
@@ -26,6 +31,7 @@ impl EngineState {
             running: RwLock::new(false),
             current_task: Mutex::new(None),
             cancel_token: Mutex::new(None),
+            deep_scanning_repos: Mutex::new(HashSet::new()),
         })
     }
 }

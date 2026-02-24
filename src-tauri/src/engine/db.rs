@@ -136,6 +136,9 @@ pub fn save_scanned_tasks(
     let conn = Connection::open(&db_path).map_err(|e| {
         format!("Failed to open database at {}: {e}", db_path.display())
     })?;
+    // Set busy timeout so concurrent writes (from Tauri SQL plugin) don't
+    // immediately fail with SQLITE_BUSY — wait up to 10s for the lock.
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
 
     // Load existing task titles for dedup (case-insensitive)
     let mut existing_titles: std::collections::HashSet<String> = std::collections::HashSet::new();

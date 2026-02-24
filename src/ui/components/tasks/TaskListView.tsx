@@ -372,7 +372,7 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
                     className="flex-1 overflow-y-auto"
                     onMouseLeave={() => setHoveredTaskId(null)}
                 >
-                    <div className="mx-auto w-full max-w-2xl px-6 pt-[28vh] pb-8">
+                    <div className="mx-auto w-full max-w-2xl px-6 pt-[5vh] pb-8">
                         <DndContext
                             sensors={sensors}
                             collisionDetection={closestCenter}
