@@ -88,18 +88,32 @@ jobs:
             - name: Debug artifact structure
               run: find artifacts -type f | head -30
 
+            - name: Rename artifacts to include architecture
+              run: |
+                  for arch in aarch64-apple-darwin x86_64-apple-darwin; do
+                    dir="artifacts/artifacts-${arch}/macos"
+                    for f in "$dir"/*.app.tar.gz; do
+                      base=$(basename "$f" .app.tar.gz)
+                      mv "$f" "$dir/${base}_${arch}.app.tar.gz"
+                    done
+                    for f in "$dir"/*.app.tar.gz.sig; do
+                      base=$(basename "$f" .app.tar.gz.sig)
+                      mv "$f" "$dir/${base}_${arch}.app.tar.gz.sig"
+                    done
+                  done
+
             - name: Generate latest.json
               run: |
                   VERSION="${GITHUB_REF_NAME#v}"
                   DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
                   # Read signature files
-                  AARCH64_SIG=$(cat artifacts/artifacts-aarch64-apple-darwin/macos/*.app.tar.gz.sig)
-                  X86_64_SIG=$(cat artifacts/artifacts-x86_64-apple-darwin/macos/*.app.tar.gz.sig)
+                  AARCH64_SIG=$(cat artifacts/artifacts-aarch64-apple-darwin/macos/*_aarch64-apple-darwin.app.tar.gz.sig)
+                  X86_64_SIG=$(cat artifacts/artifacts-x86_64-apple-darwin/macos/*_x86_64-apple-darwin.app.tar.gz.sig)
 
                   # Get filenames
-                  AARCH64_TAR=$(basename artifacts/artifacts-aarch64-apple-darwin/macos/*.app.tar.gz)
-                  X86_64_TAR=$(basename artifacts/artifacts-x86_64-apple-darwin/macos/*.app.tar.gz)
+                  AARCH64_TAR=$(basename artifacts/artifacts-aarch64-apple-darwin/macos/*_aarch64-apple-darwin.app.tar.gz)
+                  X86_64_TAR=$(basename artifacts/artifacts-x86_64-apple-darwin/macos/*_x86_64-apple-darwin.app.tar.gz)
 
                   cat > latest.json << EOF
                   {
