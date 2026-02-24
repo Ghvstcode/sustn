@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRepositories, useGitBranches } from "@core/api/useRepositories";
 import {
     useGlobalSettings,
@@ -19,6 +19,7 @@ import { Slider } from "@ui/components/ui/slider";
 import type { BranchPrefixMode } from "@core/types/settings";
 import type { ScheduleMode } from "@core/types/agent";
 import { Trash2, Clock, Zap, Hand } from "lucide-react";
+import { undoToast } from "@ui/lib/toast";
 
 interface ProjectSectionProps {
     repositoryId: string;
@@ -52,6 +53,22 @@ export function ProjectSection({
     );
     const agentPrefsDirty = useRef(false);
     const scanPrefsDirty = useRef(false);
+
+    // Local slider state for project budget — only persisted on mouse-up
+    const [localBudget, setLocalBudget] = useState<number | undefined>(
+        undefined,
+    );
+    const serverBudget = useMemo(
+        () =>
+            overrides && globalSettings
+                ? (overrides.overrideBudgetCeilingPercent ??
+                  globalSettings.budgetCeilingPercent)
+                : undefined,
+        [overrides, globalSettings],
+    );
+    useEffect(() => {
+        if (serverBudget !== undefined) setLocalBudget(serverBudget);
+    }, [serverBudget]);
 
     const repo = repositories?.find((r) => r.id === repositoryId);
     const { data: branches } = useGitBranches(repo?.path);
@@ -124,6 +141,7 @@ export function ProjectSection({
     const effectiveSchedule =
         agentConfig?.scheduleMode ?? (globalSettings.agentMode as ScheduleMode);
     const effectiveBudget =
+        localBudget ??
         overrides.overrideBudgetCeilingPercent ??
         globalSettings.budgetCeilingPercent;
 
@@ -421,13 +439,23 @@ export function ProjectSection({
                                 <button
                                     key={mode.value}
                                     type="button"
-                                    onClick={() =>
+                                    onClick={() => {
+                                        const prev = effectiveSchedule;
+                                        if (prev === mode.value) return;
                                         updateAgentConfig({
                                             repositoryId,
                                             scheduleMode:
                                                 mode.value as ScheduleMode,
-                                        })
-                                    }
+                                        });
+                                        undoToast(
+                                            `Schedule → ${mode.label}`,
+                                            () =>
+                                                updateAgentConfig({
+                                                    repositoryId,
+                                                    scheduleMode: prev,
+                                                }),
+                                        );
+                                    }}
                                     className={`group flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-all duration-200 ${
                                         isSelected
                                             ? "bg-foreground text-background shadow-sm"
@@ -495,13 +523,35 @@ export function ProjectSection({
                     <div className="flex shrink-0 items-center gap-3">
                         <Slider
                             value={[effectiveBudget]}
-                            onValueChange={([value]) =>
+                            onValueChange={([value]) => setLocalBudget(value)}
+                            onValueCommit={([value]) => {
+                                const prev = serverBudget;
+                                if (prev === undefined || prev === value)
+                                    return;
+                                const hadOverride =
+                                    overrides.overrideBudgetCeilingPercent !==
+                                    undefined;
                                 updateOverride({
                                     repositoryId,
                                     field: "overrideBudgetCeilingPercent",
                                     value,
-                                })
-                            }
+                                });
+                                undoToast(`Project budget → ${value}%`, () => {
+                                    setLocalBudget(prev);
+                                    if (!hadOverride) {
+                                        clearOverride({
+                                            repositoryId,
+                                            field: "overrideBudgetCeilingPercent",
+                                        });
+                                    } else {
+                                        updateOverride({
+                                            repositoryId,
+                                            field: "overrideBudgetCeilingPercent",
+                                            value: prev,
+                                        });
+                                    }
+                                });
+                            }}
                             min={10}
                             max={100}
                             step={5}
