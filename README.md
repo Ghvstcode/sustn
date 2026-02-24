@@ -22,9 +22,7 @@ Every AI coding tool waits for you to tell it what to do. **sustn** doesn't.
 It scans your repositories, builds a prioritized backlog of improvements, and works through them automatically using your leftover [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://openai.com/index/introducing-codex/) subscription budget. Every change lands as a branch — nothing touches `main` without your approval.
 
 <p align="center">
-  <a href="https://www.loom.com/share/c845cfd02d2b4d449637c4938bf03a4b">
-    <img src="https://cdn.loom.com/sessions/thumbnails/c845cfd02d2b4d449637c4938bf03a4b-with-play.gif" alt="sustn demo" width="700" />
-  </a>
+  <img width="1186" height="793" alt="sustn_screenshot" src="https://github.com/user-attachments/assets/0229becf-6f46-4d8e-bbcb-e2c8473b8b17" />
 </p>
 
 ## How it works
