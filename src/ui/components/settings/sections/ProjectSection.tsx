@@ -526,7 +526,11 @@ export function ProjectSection({
                             onValueChange={([value]) => setLocalBudget(value)}
                             onValueCommit={([value]) => {
                                 const prev = serverBudget;
-                                if (prev === value) return;
+                                if (prev === undefined || prev === value)
+                                    return;
+                                const hadOverride =
+                                    overrides.overrideBudgetCeilingPercent !==
+                                    undefined;
                                 updateOverride({
                                     repositoryId,
                                     field: "overrideBudgetCeilingPercent",
@@ -534,10 +538,7 @@ export function ProjectSection({
                                 });
                                 undoToast(`Project budget → ${value}%`, () => {
                                     setLocalBudget(prev);
-                                    if (
-                                        prev ===
-                                        globalSettings.budgetCeilingPercent
-                                    ) {
+                                    if (!hadOverride) {
                                         clearOverride({
                                             repositoryId,
                                             field: "overrideBudgetCeilingPercent",
