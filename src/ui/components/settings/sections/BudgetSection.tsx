@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Switch } from "@ui/components/ui/switch";
 import { Slider } from "@ui/components/ui/slider";
 import { SettingsRow } from "../SettingsRow";
@@ -5,14 +6,25 @@ import {
     useGlobalSettings,
     useUpdateGlobalSetting,
 } from "@core/api/useSettings";
+import { undoToast } from "@ui/lib/toast";
 
 export function BudgetSection() {
     const { data: settings } = useGlobalSettings();
     const { mutate: updateSetting } = useUpdateGlobalSetting();
 
-    if (!settings) return null;
+    // Local slider state — only persisted on mouse-up / touch-end
+    const [localCeiling, setLocalCeiling] = useState<number | undefined>(
+        undefined,
+    );
 
-    const ceiling = settings.budgetCeilingPercent;
+    // Sync from server when settings load or change externally
+    useEffect(() => {
+        if (settings) setLocalCeiling(settings.budgetCeilingPercent);
+    }, [settings]);
+
+    if (!settings || localCeiling === undefined) return null;
+
+    const ceiling = localCeiling;
     const reserved = 100 - ceiling;
 
     return (
@@ -44,11 +56,26 @@ export function BudgetSection() {
                             <Slider
                                 value={[ceiling]}
                                 onValueChange={([value]) =>
+                                    setLocalCeiling(value)
+                                }
+                                onValueCommit={([value]) => {
+                                    const prev = settings.budgetCeilingPercent;
+                                    if (prev === value) return;
                                     updateSetting({
                                         key: "budgetCeilingPercent",
                                         value,
-                                    })
-                                }
+                                    });
+                                    undoToast(
+                                        `Budget ceiling → ${value}%`,
+                                        () => {
+                                            setLocalCeiling(prev);
+                                            updateSetting({
+                                                key: "budgetCeilingPercent",
+                                                value: prev,
+                                            });
+                                        },
+                                    );
+                                }}
                                 min={10}
                                 max={100}
                                 step={5}

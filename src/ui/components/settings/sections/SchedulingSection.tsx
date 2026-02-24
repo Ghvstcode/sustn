@@ -16,6 +16,7 @@ import type {
     ScanFrequency,
 } from "@core/types/settings";
 import { Clock, Zap, Hand } from "lucide-react";
+import { undoToast } from "@ui/lib/toast";
 
 const AGENT_MODES: {
     value: AgentMode;
@@ -112,12 +113,22 @@ export function SchedulingSection() {
                                     <button
                                         key={mode.value}
                                         type="button"
-                                        onClick={() =>
+                                        onClick={() => {
+                                            const prev = settings.agentMode;
+                                            if (prev === mode.value) return;
                                             updateSetting({
                                                 key: "agentMode",
                                                 value: mode.value,
-                                            })
-                                        }
+                                            });
+                                            undoToast(
+                                                `Agent mode → ${mode.label}`,
+                                                () =>
+                                                    updateSetting({
+                                                        key: "agentMode",
+                                                        value: prev,
+                                                    }),
+                                            );
+                                        }}
                                         className={`group flex flex-1 flex-col items-start gap-1.5 rounded-md px-3 py-2.5 text-left transition-all duration-200 ${
                                             isSelected
                                                 ? "bg-foreground text-background shadow-sm"
