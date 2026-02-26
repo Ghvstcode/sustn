@@ -4,4 +4,5 @@ export type Bindings = {
     GITHUB_CLIENT_SECRET: string;
     SERVER_URL: string;
     APP_DEEP_LINK_SCHEME: string;
+    ALLOWED_ORIGINS: string;
 };

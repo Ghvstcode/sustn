@@ -4,6 +4,7 @@ compatibility_date = "2025-01-01"
 
 [vars]
 APP_DEEP_LINK_SCHEME = "sustn"
+ALLOWED_ORIGINS = "https://sustn.app"
 
 [[d1_databases]]
 binding = "DB"
