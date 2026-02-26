@@ -232,16 +232,16 @@ pub async fn execute_task(
 
                         last_feedback = review.feedback.clone();
                         if attempt > max_retries {
-                            let _ =
-                                git::checkout_branch(repo_path, &original_branch_name);
-
                             // When retries are exhausted due to parse failures, the
                             // implementation may still be correct — mark as success
                             // but flag review_inconclusive so the user manually reviews
                             // (and auto-PR is skipped).
                             if is_parse_failure {
+                                // Capture SHA while still on the task branch (before switching back)
                                 let sha = git::latest_commit_sha(repo_path);
                                 println!("[worker] REVIEW INCONCLUSIVE — returning success with review_inconclusive flag");
+                                let _ =
+                                    git::checkout_branch(repo_path, &original_branch_name);
                                 return WorkResult {
                                     success: true,
                                     phase_reached: TaskPhase::Reviewing,
@@ -263,6 +263,8 @@ pub async fn execute_task(
                                 };
                             }
 
+                            let _ =
+                                git::checkout_branch(repo_path, &original_branch_name);
                             return WorkResult {
                                 success: false,
                                 phase_reached: TaskPhase::Reviewing,
