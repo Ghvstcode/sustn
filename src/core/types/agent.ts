@@ -70,6 +70,8 @@ export interface WorkResult {
     summary: string | undefined;
     error: string | undefined;
     sessionId: string | undefined;
+    /** True when automated review couldn't produce a valid verdict (e.g. unparseable output). */
+    reviewInconclusive: boolean;
 }
 
 export interface AgentRun {

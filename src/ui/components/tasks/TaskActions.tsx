@@ -56,6 +56,16 @@ export function TaskActions({
                 </Button>
             )}
 
+            {/* Review: warning banner when automated review was inconclusive */}
+            {state === "review" && task.lastError && (
+                <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate max-w-[300px]">
+                        {task.lastError}
+                    </span>
+                </div>
+            )}
+
             {/* Review: Create PR, Request Changes, Approve */}
             {state === "review" && (
                 <>

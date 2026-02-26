@@ -16,6 +16,10 @@ pub struct WorkResult {
     pub error: Option<String>,
     /// Claude CLI session ID, used to resume conversation on change requests.
     pub session_id: Option<String>,
+    /// True when the automated review could not produce a valid verdict
+    /// (e.g. the reviewer returned unparseable output on every attempt).
+    /// The implementation may still be correct — the user should manually review.
+    pub review_inconclusive: bool,
 }
 
 /// Output we expect from the implement phase.
@@ -73,6 +77,7 @@ pub async fn execute_task(
                 original_branch.error
             )),
             session_id: None,
+            review_inconclusive: false,
         };
     }
     let original_branch_name = original_branch.output.clone();
@@ -93,6 +98,7 @@ pub async fn execute_task(
                     "Working tree is dirty and auto-stash failed. Commit or stash changes manually.".to_string(),
                 ),
                 session_id: None,
+                review_inconclusive: false,
             };
         }
     }
@@ -111,6 +117,7 @@ pub async fn execute_task(
                 summary: None,
                 error: Some(format!("Failed to checkout branch: {:?}", checkout.error)),
                 session_id: None,
+                review_inconclusive: false,
             };
         }
     } else {
@@ -125,6 +132,7 @@ pub async fn execute_task(
                 summary: None,
                 error: Some(format!("Failed to create branch from {}: {:?}", base_branch, create.error)),
                 session_id: None,
+                review_inconclusive: false,
             };
         }
     }
@@ -207,15 +215,54 @@ pub async fn execute_task(
                             summary: impl_output.summary,
                             error: None,
                             session_id: impl_output.session_id,
+                            review_inconclusive: false,
                         };
                     }
                     Ok(review) => {
-                        // Review failed — retry if we can
-                        println!("[worker] REVIEW REJECTED (attempt {attempt}) — retrying? {}", attempt <= max_retries);
+                        // Distinguish between "review found real issues" and
+                        // "review output couldn't be parsed" for clear logging.
+                        let is_parse_failure = review.feedback.as_deref()
+                            .is_some_and(|f| f.contains("not structured JSON"));
+
+                        if is_parse_failure {
+                            println!("[worker] REVIEW PARSE FAILURE (attempt {attempt}) — reviewer returned unparseable output, retrying? {}", attempt <= max_retries);
+                        } else {
+                            println!("[worker] REVIEW REJECTED (attempt {attempt}) — reviewer found issues, retrying? {}", attempt <= max_retries);
+                        }
+
                         last_feedback = review.feedback.clone();
                         if attempt > max_retries {
                             let _ =
                                 git::checkout_branch(repo_path, &original_branch_name);
+
+                            // When retries are exhausted due to parse failures, the
+                            // implementation may still be correct — mark as success
+                            // but flag review_inconclusive so the user manually reviews
+                            // (and auto-PR is skipped).
+                            if is_parse_failure {
+                                let sha = git::latest_commit_sha(repo_path);
+                                println!("[worker] REVIEW INCONCLUSIVE — returning success with review_inconclusive flag");
+                                return WorkResult {
+                                    success: true,
+                                    phase_reached: TaskPhase::Reviewing,
+                                    branch_name: Some(branch_name.to_string()),
+                                    commit_sha: if sha.success {
+                                        Some(sha.output)
+                                    } else {
+                                        None
+                                    },
+                                    files_modified: impl_output
+                                        .files_modified
+                                        .unwrap_or_default(),
+                                    summary: impl_output.summary,
+                                    error: Some(
+                                        "Automated review could not complete — reviewer returned unparseable output on every attempt".to_string(),
+                                    ),
+                                    session_id: impl_output.session_id,
+                                    review_inconclusive: true,
+                                };
+                            }
+
                             return WorkResult {
                                 success: false,
                                 phase_reached: TaskPhase::Reviewing,
@@ -229,6 +276,7 @@ pub async fn execute_task(
                                     review.feedback.unwrap_or_default()
                                 )),
                                 session_id: impl_output.session_id,
+                                review_inconclusive: false,
                             };
                         }
                         // Loop continues to retry implementation
@@ -244,6 +292,7 @@ pub async fn execute_task(
                             summary: None,
                             error: Some(format!("Review phase failed: {}", e)),
                             session_id: impl_output.session_id,
+                            review_inconclusive: false,
                         };
                     }
                 }
@@ -259,6 +308,7 @@ pub async fn execute_task(
                     summary: None,
                     error: Some(format!("Implementation failed: {}", e)),
                     session_id: None,
+                    review_inconclusive: false,
                 };
             }
         }
@@ -488,12 +538,13 @@ fn parse_review_output(output: &str) -> Result<ReviewOutput, String> {
         return Ok(parsed);
     }
 
-    // Default: assume review passed if we couldn't parse output
-    // (better to let the user review than to block on parse failure)
-    println!("[worker:parse_review] FALLBACK — defaulting to passed");
+    // Default: fail the review when output can't be parsed.
+    // This triggers a retry, giving the reviewer another chance to produce valid JSON.
+    // If retries are exhausted, the caller handles it as an inconclusive review.
+    println!("[worker:parse_review] FALLBACK — defaulting to FAILED (unparseable output)");
     Ok(ReviewOutput {
-        passed: Some(true),
-        feedback: Some("Review output was not structured JSON — defaulting to passed".to_string()),
+        passed: Some(false),
+        feedback: Some("Review output was not structured JSON — automated review could not complete".to_string()),
         issues: Some(vec![]),
     })
 }

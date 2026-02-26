@@ -381,15 +381,20 @@ async function handleTaskResult(
                 result.branchName,
                 "sha:",
                 result.commitSha,
+                "reviewInconclusive:",
+                result.reviewInconclusive,
             );
 
             const settings = await getGlobalSettings();
             let prUrl: string | undefined;
 
+            // Skip auto-PR when the review was inconclusive — the user
+            // must manually verify the changes before a PR is created.
             if (
                 settings.autoCreatePrs &&
                 result.branchName &&
-                variables.repoPath
+                variables.repoPath &&
+                !result.reviewInconclusive
             ) {
                 try {
                     const pushResult = await invoke<{
@@ -429,13 +434,27 @@ async function handleTaskResult(
                 sessionId: result.sessionId,
                 completedAt: new Date().toISOString(),
                 ...(prUrl ? { prUrl } : {}),
+                // Store the review warning so the UI can display it
+                ...(result.reviewInconclusive
+                    ? {
+                          lastError:
+                              result.error ??
+                              "Automated review could not complete",
+                      }
+                    : {}),
             });
 
             if (notify && settings.notificationsEnabled) {
                 markTaskNotified(variables.taskId);
                 sendNotification(
-                    prUrl ? "PR created" : "Task ready for review",
-                    `"${variables.taskTitle}" completed successfully.`,
+                    result.reviewInconclusive
+                        ? "Task needs manual review"
+                        : prUrl
+                          ? "PR created"
+                          : "Task ready for review",
+                    result.reviewInconclusive
+                        ? `"${variables.taskTitle}" — automated review could not complete.`
+                        : `"${variables.taskTitle}" completed successfully.`,
                 );
                 void incrementBadge();
             }
