@@ -56,11 +56,13 @@ export function WelcomeStep({ onNext }: WelcomeStepProps) {
             const params = parsed.searchParams;
             const state = params.get("state");
 
-            // Validate state matches what we sent
-            if (state && stateRef.current && state !== stateRef.current) {
-                console.warn("OAuth state mismatch");
+            // Validate state matches what we sent — reject if either is missing
+            if (!state || !stateRef.current || state !== stateRef.current) {
+                console.warn("OAuth state mismatch or missing");
                 setStatus("error");
-                setErrorMessage("OAuth state mismatch. Please try again.");
+                setErrorMessage(
+                    "Authentication failed — invalid state. Please try again.",
+                );
                 return;
             }
 
