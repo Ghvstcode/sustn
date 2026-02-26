@@ -226,7 +226,13 @@ async function runSchedulerTick(
             if (result.success) {
                 let prUrl: string | undefined;
 
-                if (settings.autoCreatePrs && result.branchName) {
+                // Skip auto-PR when the review was inconclusive — the user
+                // must manually verify the changes before a PR is created.
+                if (
+                    settings.autoCreatePrs &&
+                    result.branchName &&
+                    !result.reviewInconclusive
+                ) {
                     try {
                         const pushResult = await invoke<{
                             success: boolean;
@@ -259,15 +265,30 @@ async function runSchedulerTick(
                     baseBranch,
                     branchName: result.branchName,
                     commitSha: result.commitSha,
+                    sessionId: result.sessionId,
                     completedAt: new Date().toISOString(),
                     ...(prUrl ? { prUrl } : {}),
+                    // Store the review warning so the UI can display it
+                    ...(result.reviewInconclusive
+                        ? {
+                              lastError:
+                                  result.error ??
+                                  "Automated review could not complete",
+                          }
+                        : {}),
                 });
 
                 if (settings.notificationsEnabled) {
                     markTaskNotified(nextTask.id);
                     sendNotification(
-                        prUrl ? "PR created" : "Task ready for review",
-                        `"${nextTask.title}" completed successfully.`,
+                        result.reviewInconclusive
+                            ? "Task needs manual review"
+                            : prUrl
+                              ? "PR created"
+                              : "Task ready for review",
+                        result.reviewInconclusive
+                            ? `"${nextTask.title}" — automated review could not complete.`
+                            : `"${nextTask.title}" completed successfully.`,
                     );
                     void incrementBadge();
                 }
