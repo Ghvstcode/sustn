@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import hljs from "highlight.js";
+import DOMPurify from "dompurify";
 import "highlight.js/styles/github-dark.css";
 import { useFileContent } from "@core/api/useFileTree";
 
@@ -60,7 +61,13 @@ export function FileContentViewer({
         const lang = getLanguage(relativePath);
         if (lang) {
             try {
-                return hljs.highlight(data.content, { language: lang }).value;
+                const raw = hljs.highlight(data.content, {
+                    language: lang,
+                }).value;
+                return DOMPurify.sanitize(raw, {
+                    ALLOWED_TAGS: ["span"],
+                    ALLOWED_ATTR: ["class"],
+                });
             } catch {
                 return null;
             }
