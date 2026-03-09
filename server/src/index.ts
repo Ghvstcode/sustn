@@ -9,7 +9,12 @@ import { metrics } from "./routes/metrics.js";
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.use("*", logger());
-app.use("*", cors());
+app.use(
+    "*",
+    cors({
+        origin: ["https://sustn.app", "tauri://localhost"],
+    }),
+);
 
 app.route("/", auth);
 app.route("/", health);
