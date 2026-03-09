@@ -33,6 +33,26 @@ function Logo({
     );
 }
 
+function InlineCode({ text }: { text: string }) {
+    const parts = text.split(/(`[^`]+`)/g);
+    return (
+        <span>
+            {parts.map((part, i) =>
+                part.startsWith("`") && part.endsWith("`") ? (
+                    <code
+                        key={i}
+                        className="bg-gray-100 text-gray-800 text-xs px-1.5 py-0.5 rounded font-mono"
+                    >
+                        {part.slice(1, -1)}
+                    </code>
+                ) : (
+                    <span key={i}>{part}</span>
+                ),
+            )}
+        </span>
+    );
+}
+
 function EntrySection({
     heading,
     items,
@@ -53,22 +73,11 @@ function EntrySection({
                         className="flex items-start gap-2.5 text-sm text-gray-600 leading-relaxed"
                     >
                         <span className="mt-[7px] w-1 h-1 rounded-full bg-gray-300 shrink-0" />
-                        <span
-                            dangerouslySetInnerHTML={{
-                                __html: formatInlineCode(item),
-                            }}
-                        />
+                        <InlineCode text={item} />
                     </li>
                 ))}
             </ul>
         </div>
-    );
-}
-
-function formatInlineCode(text: string): string {
-    return text.replace(
-        /`([^`]+)`/g,
-        '<code class="bg-gray-100 text-gray-800 text-xs px-1.5 py-0.5 rounded font-mono">$1</code>',
     );
 }
 
