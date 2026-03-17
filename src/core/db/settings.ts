@@ -6,6 +6,10 @@ import type {
     BranchPrefixMode,
     ScheduleDay,
 } from "@core/types/settings";
+import {
+    validateGlobalSetting,
+    validateProjectOverride,
+} from "@core/utils/validate-settings";
 
 interface SettingRow {
     key: string;
@@ -124,6 +128,8 @@ export async function updateGlobalSetting(
     camelKey: keyof GlobalSettings,
     value: unknown,
 ): Promise<void> {
+    validateGlobalSetting(camelKey, value);
+
     const db = await getDb();
     const snakeKey = REVERSE_KEY_MAP[camelKey];
     if (!snakeKey) return;
@@ -201,6 +207,8 @@ export async function updateProjectOverride(
     field: keyof Omit<ProjectOverrides, "repositoryId">,
     value: unknown,
 ): Promise<void> {
+    validateProjectOverride(field, value);
+
     const db = await getDb();
     const column = OVERRIDE_COLUMN_MAP[field];
     if (!column) return;

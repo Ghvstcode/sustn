@@ -5,6 +5,7 @@ import type {
     BudgetConfig,
     ScheduleMode,
 } from "@core/types/agent";
+import { validateScheduleWindow } from "@core/utils/validate-settings";
 
 interface AgentConfigRow {
     repository_id: string;
@@ -86,6 +87,16 @@ export async function updateAgentConfig(
         >
     >,
 ): Promise<AgentConfig> {
+    if (fields.scheduleWindowStart !== undefined) {
+        validateScheduleWindow(
+            "scheduleWindowStart",
+            fields.scheduleWindowStart,
+        );
+    }
+    if (fields.scheduleWindowEnd !== undefined) {
+        validateScheduleWindow("scheduleWindowEnd", fields.scheduleWindowEnd);
+    }
+
     const db = await getDb();
 
     // Ensure row exists
