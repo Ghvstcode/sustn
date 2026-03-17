@@ -35,6 +35,7 @@ const KEY_MAP: Record<string, keyof GlobalSettings> = {
     sound_preset: "soundPreset",
     auto_create_prs: "autoCreatePrs",
     delete_branch_on_dismiss: "deleteBranchOnDismiss",
+    analytics_enabled: "analyticsEnabled",
     branch_prefix_mode: "branchPrefixMode",
     branch_prefix_custom: "branchPrefixCustom",
     branch_name_style: "branchNameStyle",
@@ -59,6 +60,7 @@ const BOOLEAN_KEYS = new Set([
     "soundEnabled",
     "autoCreatePrs",
     "deleteBranchOnDismiss",
+    "analyticsEnabled",
     "showBudgetInSidebar",
 ]);
 
@@ -84,6 +86,7 @@ const DEFAULTS: GlobalSettings = {
     soundPreset: "chime",
     autoCreatePrs: false,
     deleteBranchOnDismiss: false,
+    analyticsEnabled: false,
     branchPrefixMode: "sustn",
     branchPrefixCustom: "",
     branchNameStyle: "slug",

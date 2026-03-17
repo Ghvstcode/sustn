@@ -11,6 +11,7 @@ export interface GlobalSettings {
     soundPreset: string;
     autoCreatePrs: boolean;
     deleteBranchOnDismiss: boolean;
+    analyticsEnabled: boolean;
 
     // Git & Branches
     branchPrefixMode: BranchPrefixMode;

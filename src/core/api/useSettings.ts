@@ -32,7 +32,7 @@ export function useUpdateGlobalSetting() {
             value: unknown;
         }) => updateGlobalSetting(key, value),
         onSuccess: (_data, variables) => {
-            metrics.track("settings_changed", { setting: variables.key });
+            void metrics.track("settings_changed", { setting: variables.key });
             savedToast();
             void queryClient.invalidateQueries({
                 queryKey: ["global-settings"],
@@ -65,7 +65,7 @@ export function useUpdateProjectOverride() {
             value: unknown;
         }) => updateProjectOverride(repositoryId, field, value),
         onSuccess: (_data, variables) => {
-            metrics.track("settings_changed", {
+            void metrics.track("settings_changed", {
                 setting: `project.${variables.field}`,
             });
             savedToast();

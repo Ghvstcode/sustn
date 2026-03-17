@@ -59,7 +59,9 @@ export function useUpdateBudgetConfig() {
         mutationFn: (fields: Partial<BudgetConfig>) =>
             updateBudgetConfig(fields),
         onSuccess: () => {
-            metrics.track("settings_changed", { setting: "budget_config" });
+            void metrics.track("settings_changed", {
+                setting: "budget_config",
+            });
             savedToast();
             void queryClient.invalidateQueries({
                 queryKey: ["budget-config"],
@@ -98,7 +100,7 @@ export function useUpdateAgentConfig() {
             priority?: number;
         }) => updateAgentConfig(repositoryId, fields),
         onSuccess: (config) => {
-            metrics.track("settings_changed", { setting: "agent_config" });
+            void metrics.track("settings_changed", { setting: "agent_config" });
             savedToast();
             void queryClient.invalidateQueries({
                 queryKey: ["agent-config", config.repositoryId],
@@ -369,7 +371,7 @@ async function handleTaskResult(
     /** Send system notifications. False for manual starts (user is already watching). */
     notify = true,
 ) {
-    metrics.track("agent_run_completed", {
+    void metrics.track("agent_run_completed", {
         taskId: variables.taskId,
         success: result.success,
     });
@@ -490,7 +492,7 @@ async function handleTaskError(
     notify = true,
 ) {
     console.error("[handleTaskError] task mutation failed:", error);
-    metrics.track("agent_run_completed", {
+    void metrics.track("agent_run_completed", {
         taskId: variables.taskId,
         success: false,
     });
@@ -540,7 +542,7 @@ export function useStartTask() {
                 "[useStartTask] invoking engine_start_task command — taskId:",
                 params.taskId,
             );
-            metrics.track("agent_run_started", { taskId: params.taskId });
+            void metrics.track("agent_run_started", { taskId: params.taskId });
 
             // Persist in_progress state to DB BEFORE the long-running Rust command.
             // This guarantees any concurrent cache invalidation (e.g., deep scan
@@ -653,7 +655,9 @@ export function useQueueProcessor() {
             // Execute the task
             let requeued = false;
             try {
-                metrics.track("agent_run_started", { taskId: next.taskId });
+                void metrics.track("agent_run_started", {
+                    taskId: next.taskId,
+                });
                 const result = await invoke<WorkResult>("engine_start_task", {
                     ...next,
                 });

@@ -1,5 +1,6 @@
 import { getAuth } from "@core/db/auth";
 import { config } from "@core/config";
+import { getGlobalSettings } from "@core/db/settings";
 
 interface MetricEvent {
     eventType: string;
@@ -30,7 +31,13 @@ class MetricsService {
         void this.flush();
     }
 
-    track(eventType: string, eventData?: Record<string, unknown>) {
+    async track(eventType: string, eventData?: Record<string, unknown>) {
+        // Check if analytics is enabled before tracking
+        const settings = await getGlobalSettings();
+        if (!settings.analyticsEnabled) {
+            return;
+        }
+
         this.queue.push({
             eventType,
             eventData,
@@ -44,6 +51,13 @@ class MetricsService {
 
     private async flush() {
         if (this.queue.length === 0) return;
+
+        // Double-check analytics is still enabled before sending
+        const settings = await getGlobalSettings();
+        if (!settings.analyticsEnabled) {
+            this.queue = []; // Clear the queue if analytics was disabled
+            return;
+        }
 
         const events = this.queue.splice(0);
         const auth = await getAuth();

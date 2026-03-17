@@ -13,6 +13,32 @@ interface MetricEvent {
     clientTimestamp: string;
 }
 
+// Simple in-memory rate limiter for Cloudflare Workers
+// Limits: 100 requests per user per minute
+const rateLimitMap = new Map<number, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 100;
+
+function checkRateLimit(userId: number): boolean {
+    const now = Date.now();
+    const userLimit = rateLimitMap.get(userId);
+
+    if (!userLimit || now > userLimit.resetAt) {
+        rateLimitMap.set(userId, {
+            count: 1,
+            resetAt: now + RATE_LIMIT_WINDOW,
+        });
+        return true;
+    }
+
+    if (userLimit.count >= RATE_LIMIT_MAX) {
+        return false;
+    }
+
+    userLimit.count++;
+    return true;
+}
+
 metrics.post("/metrics/events", async (c) => {
     const authHeader = c.req.header("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
@@ -38,6 +64,11 @@ metrics.post("/metrics/events", async (c) => {
 
     if (!userId) {
         return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    // Rate limiting check
+    if (!checkRateLimit(userId)) {
+        return c.json({ error: "Rate limit exceeded" }, 429);
     }
 
     const body = await c.req.json<{ events: MetricEvent[] }>();

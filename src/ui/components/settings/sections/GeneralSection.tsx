@@ -132,10 +132,30 @@ export function GeneralSection() {
                         />
                     </SettingsRow>
                 </div>
-                {/* 
+
                 <div
                     className="animate-fade-in-up"
                     style={{ animationDelay: "200ms" }}
+                >
+                    <SettingsRow
+                        label="Share anonymous usage data"
+                        sublabel="Help improve SUSTN by sharing anonymous analytics (task creation, scans, PR creation). No code or repository names are collected."
+                    >
+                        <Switch
+                            checked={settings.analyticsEnabled}
+                            onCheckedChange={(checked) =>
+                                updateSetting({
+                                    key: "analyticsEnabled",
+                                    value: checked,
+                                })
+                            }
+                        />
+                    </SettingsRow>
+                </div>
+                {/*
+                <div
+                    className="animate-fade-in-up"
+                    style={{ animationDelay: "250ms" }}
                 >
                     <SettingsRow
                         label="Delete branch on dismiss"

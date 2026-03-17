@@ -6,7 +6,7 @@ let sessionStart: number | undefined;
 export function startSessionTracking() {
     sessionStart = Date.now();
     metrics.start();
-    metrics.track("session_start");
+    void metrics.track("session_start");
 
     const appWindow = getCurrentWindow();
     void appWindow.onCloseRequested(() => {
@@ -14,7 +14,7 @@ export function startSessionTracking() {
             const durationSeconds = Math.round(
                 (Date.now() - sessionStart) / 1000,
             );
-            metrics.track("session_end", { durationSeconds });
+            void metrics.track("session_end", { durationSeconds });
         }
         metrics.stop();
     });

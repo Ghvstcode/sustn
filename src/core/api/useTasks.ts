@@ -53,7 +53,7 @@ export function useCreateTask() {
             estimatedEffort?: EstimatedEffort;
         }) => dbCreateTask(task),
         onSuccess: (task) => {
-            metrics.track("task_created", { category: task.category });
+            void metrics.track("task_created", { category: task.category });
             void queryClient.invalidateQueries({
                 queryKey: ["tasks", task.repositoryId],
             });

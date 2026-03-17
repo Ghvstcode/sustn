@@ -68,7 +68,9 @@ export function useAddRepository() {
             return repo;
         },
         onSuccess: (_data, variables) => {
-            metrics.track("project_added", { repositoryName: variables.name });
+            void metrics.track("project_added", {
+                repositoryName: variables.name,
+            });
             void queryClient.invalidateQueries({ queryKey: ["repositories"] });
         },
     });
@@ -99,7 +101,7 @@ export function useCloneRepository() {
             return await dbAddRepository(result.path, name);
         },
         onSuccess: (repo) => {
-            metrics.track("project_added", { repositoryName: repo.name });
+            void metrics.track("project_added", { repositoryName: repo.name });
             void queryClient.invalidateQueries({ queryKey: ["repositories"] });
         },
     });

@@ -251,5 +251,13 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "add analytics_enabled setting for user consent",
+            sql: r#"
+                INSERT OR IGNORE INTO global_settings (key, value) VALUES ('analytics_enabled', 'false');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
