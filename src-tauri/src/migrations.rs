@@ -251,5 +251,30 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "make github_access_token nullable (tokens move to OS keychain)",
+            sql: r#"
+                CREATE TABLE auth_new (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    github_id INTEGER NOT NULL UNIQUE,
+                    github_username TEXT NOT NULL,
+                    github_avatar_url TEXT,
+                    github_email TEXT,
+                    github_access_token TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                INSERT INTO auth_new
+                    SELECT id, github_id, github_username, github_avatar_url,
+                           github_email, github_access_token, created_at, updated_at
+                    FROM auth;
+
+                DROP TABLE auth;
+                ALTER TABLE auth_new RENAME TO auth;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
