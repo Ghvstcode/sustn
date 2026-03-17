@@ -11,6 +11,7 @@ interface MetricEvent {
 class MetricsService {
     private queue: MetricEvent[] = [];
     private flushTimer: ReturnType<typeof setInterval> | undefined;
+    private isFlushing = false;
     private readonly FLUSH_INTERVAL = 30_000;
     private readonly BATCH_THRESHOLD = 20;
     private readonly MAX_QUEUE = 200;
@@ -50,36 +51,53 @@ class MetricsService {
     }
 
     private async flush() {
-        if (this.queue.length === 0) return;
+        // Prevent concurrent flushes to avoid race condition
+        if (this.isFlushing || this.queue.length === 0) return;
 
-        // Double-check analytics is still enabled before sending
-        const settings = await getGlobalSettings();
-        if (!settings.analyticsEnabled) {
-            this.queue = []; // Clear the queue if analytics was disabled
-            return;
-        }
-
-        const events = this.queue.splice(0);
-        const auth = await getAuth();
-        if (!auth?.accessToken) return;
+        this.isFlushing = true;
 
         try {
-            const response = await fetch(this.ENDPOINT, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${auth.accessToken}`,
-                },
-                body: JSON.stringify({ events }),
-            });
+            // Double-check analytics is still enabled before sending
+            const settings = await getGlobalSettings();
+            if (!settings.analyticsEnabled) {
+                this.queue = []; // Clear the queue if analytics was disabled
+                return;
+            }
 
-            if (!response.ok && this.queue.length < this.MAX_QUEUE) {
+            // Extract events to send, keeping queue intact for new events
+            const events = this.queue.splice(0);
+            const auth = await getAuth();
+            if (!auth?.accessToken) {
+                // Re-queue events if no auth token
                 this.queue.unshift(...events);
+                return;
             }
-        } catch {
-            if (this.queue.length < this.MAX_QUEUE) {
-                this.queue.unshift(...events);
+
+            try {
+                const response = await fetch(this.ENDPOINT, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${auth.accessToken}`,
+                    },
+                    body: JSON.stringify({ events }),
+                });
+
+                if (
+                    !response.ok &&
+                    this.queue.length + events.length <= this.MAX_QUEUE
+                ) {
+                    // Re-insert failed events at the front of the queue
+                    this.queue.unshift(...events);
+                }
+            } catch {
+                if (this.queue.length + events.length <= this.MAX_QUEUE) {
+                    // Re-insert failed events at the front of the queue
+                    this.queue.unshift(...events);
+                }
             }
+        } finally {
+            this.isFlushing = false;
         }
     }
 }

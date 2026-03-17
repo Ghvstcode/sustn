@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { eq, gte, and, sql } from "drizzle-orm";
 import type { Bindings } from "../lib/config.js";
 import { createDb } from "../db/index.js";
 import { users, metricEvents } from "../db/schema.js";
@@ -13,30 +13,45 @@ interface MetricEvent {
     clientTimestamp: string;
 }
 
-// Simple in-memory rate limiter for Cloudflare Workers
+// Database-backed rate limiter for Cloudflare Workers
 // Limits: 100 requests per user per minute
-const rateLimitMap = new Map<number, { count: number; resetAt: number }>();
-const RATE_LIMIT_WINDOW = 60_000; // 1 minute
+// Uses D1 to persist rate limit state across worker isolates
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX = 100;
 
-function checkRateLimit(userId: number): boolean {
-    const now = Date.now();
-    const userLimit = rateLimitMap.get(userId);
+async function checkRateLimit(
+    db: ReturnType<typeof createDb>,
+    userId: number,
+): Promise<boolean> {
+    try {
+        // Count events from the last minute using SQLite datetime comparison
+        // D1/SQLite stores timestamps as ISO strings, so we use datetime('now', '-1 minute')
+        const result = await db
+            .select({
+                count: sql<number>`count(*)`,
+            })
+            .from(metricEvents)
+            .where(
+                and(
+                    eq(metricEvents.userId, userId),
+                    gte(
+                        metricEvents.createdAt,
+                        sql`datetime('now', '-1 minute')`,
+                    ),
+                ),
+            );
 
-    if (!userLimit || now > userLimit.resetAt) {
-        rateLimitMap.set(userId, {
-            count: 1,
-            resetAt: now + RATE_LIMIT_WINDOW,
-        });
+        const count = result[0]?.count ?? 0;
+
+        if (count >= RATE_LIMIT_MAX) {
+            return false;
+        }
+
+        return true;
+    } catch {
+        // On error, allow the request (fail open)
         return true;
     }
-
-    if (userLimit.count >= RATE_LIMIT_MAX) {
-        return false;
-    }
-
-    userLimit.count++;
-    return true;
 }
 
 metrics.post("/metrics/events", async (c) => {
@@ -67,7 +82,7 @@ metrics.post("/metrics/events", async (c) => {
     }
 
     // Rate limiting check
-    if (!checkRateLimit(userId)) {
+    if (!(await checkRateLimit(db, userId))) {
         return c.json({ error: "Rate limit exceeded" }, 429);
     }
 
