@@ -9,6 +9,7 @@ import {
 import "./App.css";
 import { ThemeProvider } from "@ui/providers/ThemeProvider";
 import { AppProvider } from "@ui/providers/AppProvider";
+import { ErrorBoundary } from "@ui/components/ErrorBoundary";
 import { AppShell } from "@ui/components/layout/AppShell";
 import { SettingsPage } from "@ui/components/settings/SettingsPage";
 import { OnboardingLayout } from "@ui/components/layout/OnboardingLayout";
@@ -134,7 +135,9 @@ function App() {
             <Router>
                 <ThemeProvider storageKey="sustn-theme">
                     <AppProvider>
-                        <AppContent />
+                        <ErrorBoundary>
+                            <AppContent />
+                        </ErrorBoundary>
                     </AppProvider>
                 </ThemeProvider>
             </Router>
