@@ -17,6 +17,7 @@ import { Toaster } from "sonner";
 import { useTheme } from "@ui/hooks/useTheme";
 import { useOnboardingStatus } from "@core/api/useOnboarding";
 import { clearBadge } from "@core/services/notifications";
+import { useEnvironmentIssueListener } from "@core/api/useEngine";
 import { listen } from "@tauri-apps/api/event";
 import {
     QueryClient,
@@ -64,6 +65,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 function AppContent() {
     const { mode } = useTheme();
     const navigate = useNavigate();
+    useEnvironmentIssueListener();
 
     // Handle menu bar navigation events from Tauri
     useEffect(() => {

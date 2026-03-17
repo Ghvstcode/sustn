@@ -32,7 +32,7 @@ import {
     incrementBadge,
 } from "@core/services/notifications";
 import { getGlobalSettings } from "@core/db/settings";
-import { savedToast, queuedToast } from "@ui/lib/toast";
+import { savedToast, queuedToast, environmentIssueToast } from "@ui/lib/toast";
 import { useQueueStore } from "@core/store/queue-store";
 
 // ── Budget ──────────────────────────────────────────────────
@@ -842,6 +842,36 @@ export function useGlobalTaskNotifications() {
             for (const p of unlisteners) {
                 void p.then((fn) => fn());
             }
+        };
+    }, []);
+}
+
+// ── Environment Issue Listener ───────────────────────────────
+
+/**
+ * Listens for environment issues detected by the engine (e.g. Xcode license,
+ * missing git) and shows a persistent toast with a "Fix" button that opens
+ * Terminal with the appropriate command.
+ *
+ * Mount once in AppShell.
+ */
+export function useEnvironmentIssueListener() {
+    useEffect(() => {
+        const unlisten = listen<{
+            error: string;
+            fixCommand: string | null;
+            fixLabel: string | null;
+        }>("agent:environment-issue", (event) => {
+            const { error, fixCommand, fixLabel } = event.payload;
+            environmentIssueToast(
+                error,
+                fixCommand ?? undefined,
+                fixLabel ?? undefined,
+            );
+        });
+
+        return () => {
+            void unlisten.then((fn) => fn());
         };
     }, []);
 }

@@ -14,6 +14,8 @@ pub struct WorkResult {
     pub files_modified: Vec<String>,
     pub summary: Option<String>,
     pub error: Option<String>,
+    /// Non-blocking suggestions from the review (present even on success).
+    pub review_warnings: Option<String>,
     /// Claude CLI session ID, used to resume conversation on change requests.
     pub session_id: Option<String>,
 }
@@ -35,8 +37,27 @@ struct ImplementOutput {
 struct ReviewOutput {
     passed: Option<bool>,
     feedback: Option<String>,
-    #[allow(dead_code)]
-    issues: Option<Vec<String>>,
+    issues: Option<Vec<serde_json::Value>>,
+}
+
+impl ReviewOutput {
+    /// Check if any issue is marked as critical.
+    fn has_critical_issues(&self) -> bool {
+        let Some(issues) = &self.issues else {
+            return false;
+        };
+        issues.iter().any(|issue| {
+            // Handle structured { description, severity } objects
+            if let Some(obj) = issue.as_object() {
+                return obj
+                    .get("severity")
+                    .and_then(|s| s.as_str())
+                    .is_some_and(|s| s.eq_ignore_ascii_case("critical"));
+            }
+            // Plain strings — can't determine severity, assume non-critical
+            false
+        })
+    }
 }
 
 const WORK_TIMEOUT_SECS: u64 = 1800; // 30 minutes per phase
@@ -69,9 +90,10 @@ pub async fn execute_task(
             files_modified: vec![],
             summary: None,
             error: Some(format!(
-                "Could not determine current branch: {:?}",
-                original_branch.error
+                "Could not determine current branch: {}",
+                original_branch.error.unwrap_or_else(|| "unknown error".to_string())
             )),
+            review_warnings: None,
             session_id: None,
         };
     }
@@ -92,6 +114,7 @@ pub async fn execute_task(
                 error: Some(
                     "Working tree is dirty and auto-stash failed. Commit or stash changes manually.".to_string(),
                 ),
+                review_warnings: None,
                 session_id: None,
             };
         }
@@ -109,7 +132,11 @@ pub async fn execute_task(
                 commit_sha: None,
                 files_modified: vec![],
                 summary: None,
-                error: Some(format!("Failed to checkout branch: {:?}", checkout.error)),
+                error: Some(format!(
+                    "Failed to checkout branch: {}",
+                    checkout.error.unwrap_or_else(|| "unknown error".to_string())
+                )),
+                review_warnings: None,
                 session_id: None,
             };
         }
@@ -123,7 +150,12 @@ pub async fn execute_task(
                 commit_sha: None,
                 files_modified: vec![],
                 summary: None,
-                error: Some(format!("Failed to create branch from {}: {:?}", base_branch, create.error)),
+                error: Some(format!(
+                    "Failed to create branch from {}: {}",
+                    base_branch,
+                    create.error.unwrap_or_else(|| "unknown error".to_string())
+                )),
+                review_warnings: None,
                 session_id: None,
             };
         }
@@ -179,6 +211,7 @@ pub async fn execute_task(
                         error: Some(
                             "Implementation phase produced no commits on the branch. Claude may have asked for permission instead of committing.".to_string(),
                         ),
+                        review_warnings: None,
                         session_id: impl_output.session_id,
                     };
                 }
@@ -226,14 +259,45 @@ pub async fn execute_task(
                                 .unwrap_or_default(),
                             summary: impl_output.summary,
                             error: None,
+                            review_warnings: review.feedback,
                             session_id: impl_output.session_id,
                         };
                     }
                     Ok(review) => {
-                        // Review failed — retry if we can
-                        println!("[worker] REVIEW REJECTED (attempt {attempt}) — retrying? {}", attempt <= max_retries);
-                        last_feedback = review.feedback.clone();
+                        // Review didn't pass — decide: retry, soft-pass, or hard-fail
+                        let has_critical = review.has_critical_issues();
+                        println!(
+                            "[worker] REVIEW REJECTED (attempt {attempt}) — has_critical={has_critical}, retrying? {}",
+                            attempt <= max_retries
+                        );
+
                         if attempt > max_retries {
+                            // Out of retries. If no critical issues, soft-pass
+                            // with the feedback attached as warnings.
+                            if !has_critical {
+                                let sha = git::latest_commit_sha(repo_path);
+                                println!("[worker] SOFT-PASS — no critical issues after {attempt} attempts, accepting with warnings");
+                                let _ = git::checkout_branch(repo_path, &original_branch_name);
+                                return WorkResult {
+                                    success: true,
+                                    phase_reached: TaskPhase::Reviewing,
+                                    branch_name: Some(branch_name.to_string()),
+                                    commit_sha: if sha.success {
+                                        Some(sha.output)
+                                    } else {
+                                        None
+                                    },
+                                    files_modified: impl_output
+                                        .files_modified
+                                        .unwrap_or_default(),
+                                    summary: impl_output.summary,
+                                    error: None,
+                                    review_warnings: review.feedback,
+                                    session_id: impl_output.session_id,
+                                };
+                            }
+
+                            // Genuine critical issues that couldn't be fixed
                             let _ =
                                 git::checkout_branch(repo_path, &original_branch_name);
                             return WorkResult {
@@ -244,14 +308,17 @@ pub async fn execute_task(
                                 files_modified: vec![],
                                 summary: None,
                                 error: Some(format!(
-                                    "Review failed after {} attempts: {}",
+                                    "Review found critical issues after {} attempts: {}",
                                     attempt,
                                     review.feedback.unwrap_or_default()
                                 )),
+                                review_warnings: None,
                                 session_id: impl_output.session_id,
                             };
                         }
-                        // Loop continues to retry implementation
+
+                        // Still have retries — feed the review back to the implementer
+                        last_feedback = review.feedback.clone();
                     }
                     Err(e) => {
                         let _ = git::checkout_branch(repo_path, &original_branch_name);
@@ -263,6 +330,7 @@ pub async fn execute_task(
                             files_modified: vec![],
                             summary: None,
                             error: Some(format!("Review phase failed: {}", e)),
+                            review_warnings: None,
                             session_id: impl_output.session_id,
                         };
                     }
@@ -278,6 +346,7 @@ pub async fn execute_task(
                     files_modified: vec![],
                     summary: None,
                     error: Some(format!("Implementation failed: {}", e)),
+                    review_warnings: None,
                     session_id: None,
                 };
             }
@@ -410,17 +479,30 @@ Summary of changes: {implementation_summary}
 {prefs_section}
 
 ## Instructions
-Review the uncommitted and recent committed changes on this branch. Check:
+Review the uncommitted and recent committed changes on this branch. Focus on:
 1. Does the implementation correctly address the task?
-2. Are there any bugs or logic errors?
-3. Is the code quality acceptable?
-4. Are there any security issues introduced?
+2. Are there any bugs, logic errors, or data-loss risks?
+3. Are there any security vulnerabilities introduced?
+
+## IMPORTANT — What counts as a failure
+Set "passed" to false ONLY if there are **critical** issues — meaning genuine bugs, security vulnerabilities, data-loss risks, or correctness problems that would break the feature.
+
+Do NOT fail the review for:
+- Style preferences or naming suggestions
+- Minor improvements or "nice to have" changes
+- Code quality suggestions that don't affect correctness
+- Missing tests (unless the task specifically requires them)
+
+These should be noted as suggestions in the issues list, but the review should still PASS.
 
 Output ONLY this JSON (no markdown, no explanation):
 {{
   "passed": true or false,
-  "feedback": "Explanation of issues found, or 'Looks good' if passed",
-  "issues": ["list", "of", "specific", "issues"] or []
+  "feedback": "Brief summary of the review",
+  "issues": [
+    {{ "description": "what the issue is", "severity": "critical" }},
+    {{ "description": "optional improvement", "severity": "suggestion" }}
+  ]
 }}"#
     );
 
