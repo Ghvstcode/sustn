@@ -179,18 +179,14 @@ pub async fn engine_start_task(
         }
     }
 
-    // Check if a task is already running
+    // Check-and-set current task atomically (single lock acquisition to
+    // prevent TOCTOU race where two calls both pass the check)
     {
-        let current = state.current_task.lock().await;
+        let mut current = state.current_task.lock().await;
         if current.is_some() {
             println!("[engine_start_task] BLOCKED — another task already in progress");
             return Err("Another task is already in progress".to_string());
         }
-    }
-
-    // Set current task
-    {
-        let mut current = state.current_task.lock().await;
         *current = Some(CurrentTask {
             task_id: task_id.clone(),
             repository_id: repository_id.clone(),
