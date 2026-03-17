@@ -39,6 +39,11 @@ class MetricsService {
             return;
         }
 
+        // If currently flushing, skip to avoid race condition with consent check
+        if (this.isFlushing) {
+            return;
+        }
+
         this.queue.push({
             eventType,
             eventData,
@@ -68,8 +73,10 @@ class MetricsService {
             const events = this.queue.splice(0);
             const auth = await getAuth();
             if (!auth?.accessToken) {
-                // Re-queue events if no auth token
-                this.queue.unshift(...events);
+                // Re-queue events if no auth token, check capacity first
+                if (this.queue.length + events.length <= this.MAX_QUEUE) {
+                    this.queue.unshift(...events);
+                }
                 return;
             }
 
@@ -83,16 +90,15 @@ class MetricsService {
                     body: JSON.stringify({ events }),
                 });
 
-                if (
-                    !response.ok &&
-                    this.queue.length + events.length <= this.MAX_QUEUE
-                ) {
-                    // Re-insert failed events at the front of the queue
-                    this.queue.unshift(...events);
+                if (!response.ok) {
+                    // Re-insert failed events at the front of the queue, check capacity first
+                    if (this.queue.length + events.length <= this.MAX_QUEUE) {
+                        this.queue.unshift(...events);
+                    }
                 }
             } catch {
+                // Re-insert failed events at the front of the queue, check capacity first
                 if (this.queue.length + events.length <= this.MAX_QUEUE) {
-                    // Re-insert failed events at the front of the queue
                     this.queue.unshift(...events);
                 }
             }

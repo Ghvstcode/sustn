@@ -2,7 +2,7 @@
 
 ## Data Collection
 
-SUSTN collects anonymous usage analytics to help improve the product. This feature is **disabled by default** (opt-out) and can be enabled or disabled at any time in Settings → General → "Share anonymous usage data".
+SUSTN collects anonymous usage analytics to help improve the product. This feature is **disabled by default** (opt-in) and can be enabled or disabled at any time in Settings → General → "Share anonymous usage data".
 
 ### What We Collect
 
