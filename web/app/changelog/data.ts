@@ -16,6 +16,31 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
     {
+        version: "0.2.0",
+        date: "Mar 18th, 2026",
+        title: "New Diff Viewer & Inline Comments",
+        description:
+            "A completely overhauled diff viewer powered by @pierre/diffs, with inline commenting for precise code review feedback.",
+        image: {
+            src: "/changelog/inline_comments_diff.png",
+            alt: "New diff viewer with inline comments",
+        },
+        features: [
+            "New diff renderer built on @pierre/diffs with Shiki-powered syntax highlighting, split and unified views, and word-level inline change detection",
+            "Inline comments — click the gutter to leave comments on specific diff lines, which are sent as structured feedback when requesting changes",
+            "Line selection — click and drag to highlight line ranges in the diff during review",
+        ],
+        improvements: [
+            "Smarter review loop: critical issues (bugs, security, data loss) are distinguished from non-critical suggestions — tasks soft-pass after max retries when only style nits remain",
+            "Increased max review retries from 2 to 4 for more thorough agent self-correction",
+            "Cleaner error messages — removed raw Rust Debug formatting from user-facing error strings",
+        ],
+        fixes: [
+            "Pre-flight environment checks now detect common issues (Xcode license not accepted, git not found) before starting a task, with an in-app 'Fix in Terminal' button",
+            "Environment issue listener now stays active across all routes including settings",
+        ],
+    },
+    {
         version: "0.1.1",
         date: "Feb 24th, 2026",
         title: "Preflight Fix",

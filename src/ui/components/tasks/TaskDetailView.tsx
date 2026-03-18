@@ -41,6 +41,7 @@ import { TaskDetailHeader } from "./TaskDetailHeader";
 import { TaskOverview } from "./TaskOverview";
 import { TaskChatTimeline } from "./TaskChatTimeline";
 import { TaskDiffViewer } from "./TaskDiffViewer";
+import type { InlineComment } from "./TaskDiffViewer";
 import { TaskChangedFilesSidebar } from "./TaskChangedFilesSidebar";
 import { TaskFilesInvolved } from "./TaskFilesInvolved";
 import { TaskStatusBanner } from "./TaskStatusBanner";
@@ -77,6 +78,7 @@ function ChatInput({
     taskId,
     placeholder,
     feedbackMode,
+    inlineCommentCount = 0,
     onFeedbackSend,
     onFeedbackCancel,
     onMessageSent,
@@ -84,6 +86,7 @@ function ChatInput({
     taskId: string;
     placeholder?: string;
     feedbackMode?: boolean;
+    inlineCommentCount?: number;
     onFeedbackSend?: (content: string) => void;
     onFeedbackCancel?: () => void;
     onMessageSent?: () => void;
@@ -167,10 +170,19 @@ function ChatInput({
             {/* Feedback mode banner */}
             {feedbackMode && (
                 <div className="flex items-center justify-between gap-2 border-b border-dashed border-amber-500/20 bg-amber-500/[0.04] px-4 py-2">
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
-                        Describe what needs to change — the agent will redo this
-                        task with your feedback.
-                    </p>
+                    <div className="flex items-center gap-2 min-w-0">
+                        <p className="text-xs text-amber-600 dark:text-amber-400 truncate">
+                            {inlineCommentCount > 0
+                                ? "Your inline comments will be sent with this message."
+                                : "Describe what needs to change — the agent will redo this task with your feedback."}
+                        </p>
+                        {inlineCommentCount > 0 && (
+                            <span className="shrink-0 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400 ring-1 ring-inset ring-amber-500/20">
+                                <MessageSquarePlus className="h-2.5 w-2.5" />
+                                {inlineCommentCount}
+                            </span>
+                        )}
+                    </div>
                     <button
                         type="button"
                         onClick={onFeedbackCancel}
@@ -278,6 +290,9 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     // ── Feedback mode (Request Changes flow) ──
     const [feedbackMode, setFeedbackMode] = useState(false);
 
+    // ── Inline comments on diff lines ──
+    const [inlineComments, setInlineComments] = useState<InlineComment[]>([]);
+
     // ── Scroll ref ──
     const scrollRef = useRef<HTMLDivElement>(null);
     const scrollToBottom = useCallback(() => {
@@ -299,6 +314,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
         setOpenTabs([]);
         setActiveTab("overview");
         setFeedbackMode(false);
+        setInlineComments([]);
     }, [taskId]);
 
     // Auto-cancel feedback mode if task leaves "review" state
@@ -391,18 +407,43 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
         setFeedbackMode(true);
     }, []);
 
+    const handleAddComment = useCallback(
+        (comment: Omit<InlineComment, "id">) => {
+            const id = `comment-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            setInlineComments((prev) => [...prev, { ...comment, id }]);
+        },
+        [],
+    );
+
+    const handleRemoveComment = useCallback((id: string) => {
+        setInlineComments((prev) => prev.filter((c) => c.id !== id));
+    }, []);
+
     const handleFeedbackSend = useCallback(
         (content: string) => {
+            // Build the full feedback message including inline comments
+            let fullContent = content;
+
+            if (inlineComments.length > 0) {
+                const commentLines = inlineComments.map((c) => {
+                    const file = c.fileName ? `${c.fileName}` : "unknown file";
+                    const side = c.side === "additions" ? "new" : "old";
+                    return `- **${file}:${c.lineNumber}** (${side}): ${c.text}`;
+                });
+                fullContent += `\n\n**Inline comments:**\n${commentLines.join("\n")}`;
+            }
+
             sendMessage.mutate({
                 taskId,
                 role: "user",
-                content,
+                content: fullContent,
             });
             updateTask.mutate({ id: taskId, state: "pending" as TaskState });
             setFeedbackMode(false);
+            setInlineComments([]);
             scrollToBottom();
         },
-        [taskId, sendMessage, updateTask, scrollToBottom],
+        [taskId, sendMessage, updateTask, scrollToBottom, inlineComments],
     );
 
     const handleFeedbackCancel = useCallback(() => {
@@ -815,6 +856,13 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                 <TaskDiffViewer
                                     diffText={diffText}
                                     singleFile={activeTab}
+                                    comments={inlineComments}
+                                    onAddComment={
+                                        task.state === "review"
+                                            ? handleAddComment
+                                            : undefined
+                                    }
+                                    onRemoveComment={handleRemoveComment}
                                 />
                             </div>
                         ) : (
@@ -884,11 +932,14 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                             <ChatInput
                                 taskId={taskId}
                                 placeholder={
-                                    isShowingDiff
-                                        ? "Leave feedback on the changes..."
-                                        : "Add context for the agent..."
+                                    feedbackMode && inlineComments.length > 0
+                                        ? `${inlineComments.length} inline comment${inlineComments.length === 1 ? "" : "s"} will be included — add a summary...`
+                                        : isShowingDiff
+                                          ? "Leave feedback on the changes..."
+                                          : "Add context for the agent..."
                                 }
                                 feedbackMode={feedbackMode}
+                                inlineCommentCount={inlineComments.length}
                                 onFeedbackSend={handleFeedbackSend}
                                 onFeedbackCancel={handleFeedbackCancel}
                                 onMessageSent={scrollToBottom}

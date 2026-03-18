@@ -132,7 +132,7 @@ export function GeneralSection() {
                         />
                     </SettingsRow>
                 </div>
-                {/* 
+                {/*
                 <div
                     className="animate-fade-in-up"
                     style={{ animationDelay: "200ms" }}

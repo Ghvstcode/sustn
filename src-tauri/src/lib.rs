@@ -95,6 +95,7 @@ pub fn run() {
             engine_commands::engine_get_diff,
             engine_commands::engine_get_diff_stat,
             engine_commands::engine_create_pr,
+            engine_commands::run_terminal_command,
             command::set_dock_badge,
         ])
         .run(tauri::generate_context!())

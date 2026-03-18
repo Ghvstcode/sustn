@@ -197,6 +197,17 @@ pub async fn engine_start_task(
         }
     }
 
+    // Pre-flight: verify git works in this repo before doing anything
+    if let Some(issue) = engine::git::preflight_check(&repo_path) {
+        println!("[engine_start_task] BLOCKED — environment issue: {}", issue.error);
+        let _ = app.emit("agent:environment-issue", serde_json::json!({
+            "error": issue.error,
+            "fixCommand": issue.fix_command,
+            "fixLabel": issue.fix_label,
+        }));
+        return Err(format!("Environment issue: {}", issue.error));
+    }
+
     // Check budget before starting work (respects per-project ceiling override)
     {
         let app_data_dir = app
@@ -253,14 +264,14 @@ pub async fn engine_start_task(
     };
 
     // Execute the task
-    println!("[engine_start_task] calling worker::execute_task — max_retries=2");
+    println!("[engine_start_task] calling worker::execute_task — max_retries=4");
     let result = worker::execute_task(
         &repo_path,
         &task_id,
         &task_title,
         &task_description,
         &files_involved,
-        2, // max retries
+        4, // max retries
         &base_branch,
         &branch_name,
         user_messages,
@@ -282,12 +293,13 @@ pub async fn engine_start_task(
 
     // Emit completion event
     if result.success {
-        println!("[engine_start_task] emitting agent:task-completed — branch={:?}", result.branch_name);
+        println!("[engine_start_task] emitting agent:task-completed — branch={:?}, has_warnings={}", result.branch_name, result.review_warnings.is_some());
         let _ = app.emit("agent:task-completed", serde_json::json!({
             "taskId": task_id,
             "repositoryId": repository_id,
             "branchName": result.branch_name,
             "commitSha": result.commit_sha,
+            "reviewWarnings": result.review_warnings,
         }));
     } else {
         println!("[engine_start_task] emitting agent:task-failed — error={:?}", result.error);
@@ -428,6 +440,28 @@ pub async fn engine_create_pr(
 #[serde(rename_all = "camelCase")]
 pub struct PrResult {
     pub url: String,
+}
+
+/// Open Terminal.app and run a command (for environment fixes that need user interaction).
+#[tauri::command]
+pub async fn run_terminal_command(command: String) -> Result<(), String> {
+    // Use osascript to open Terminal and run the command.
+    // This handles sudo prompts, license agreements, etc. interactively.
+    let script = format!(
+        r#"tell application "Terminal"
+    activate
+    do script "{}"
+end tell"#,
+        command.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+
+    std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .spawn()
+        .map_err(|e| format!("Failed to open Terminal: {e}"))?;
+
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize)]

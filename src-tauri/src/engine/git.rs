@@ -175,6 +175,60 @@ pub fn diff_stat(cwd: &str, base_branch: &str, head_branch: &str) -> Result<Vec<
         .collect())
 }
 
+/// Known environment issues that can be detected from git error output.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentIssue {
+    pub error: String,
+    pub fix_command: Option<String>,
+    pub fix_label: Option<String>,
+}
+
+/// Run a quick git health check and return any detected environment issues.
+pub fn preflight_check(cwd: &str) -> Option<EnvironmentIssue> {
+    let result = run_git(cwd, &["status", "--porcelain"]);
+    if result.success {
+        return None;
+    }
+
+    let stderr = result.error.unwrap_or_default();
+    detect_environment_issue(&stderr)
+}
+
+/// Pattern-match known environment errors and provide actionable fixes.
+fn detect_environment_issue(stderr: &str) -> Option<EnvironmentIssue> {
+    if stderr.contains("Xcode license") || stderr.contains("xcodebuild -license") {
+        return Some(EnvironmentIssue {
+            error: "Xcode license has not been accepted. Git requires the Xcode command line tools license.".to_string(),
+            fix_command: Some("sudo xcodebuild -license accept".to_string()),
+            fix_label: Some("Accept Xcode License".to_string()),
+        });
+    }
+
+    if stderr.contains("not a git repository") {
+        return Some(EnvironmentIssue {
+            error: "This directory is not a git repository.".to_string(),
+            fix_command: None,
+            fix_label: None,
+        });
+    }
+
+    if stderr.contains("command not found") || stderr.contains("No such file or directory") {
+        return Some(EnvironmentIssue {
+            error: "Git is not installed or not found in PATH.".to_string(),
+            fix_command: Some("xcode-select --install".to_string()),
+            fix_label: Some("Install Command Line Tools".to_string()),
+        });
+    }
+
+    // Unknown error — return it as-is without a fix command
+    Some(EnvironmentIssue {
+        error: stderr.to_string(),
+        fix_command: None,
+        fix_label: None,
+    })
+}
+
 /// Generate a branch name for a task.
 pub fn task_branch_name(task_id: &str) -> String {
     // Use first 8 chars of UUID for readability
