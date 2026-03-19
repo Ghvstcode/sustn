@@ -1,6 +1,13 @@
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Clock, AlertTriangle, Terminal } from "lucide-react";
+import {
+    Check,
+    Clock,
+    AlertTriangle,
+    Terminal,
+    ArrowDownToLine,
+    Loader2,
+} from "lucide-react";
 
 export function savedToast() {
     toast.custom(
@@ -65,5 +72,59 @@ export function environmentIssueToast(
             </div>
         ),
         { id: "environment-issue", duration: Infinity },
+    );
+}
+
+export function updateAvailableToast(version: string, onInstall: () => void) {
+    toast.custom(
+        (id) => (
+            <div className="flex flex-col gap-2.5 rounded-lg border border-border bg-background p-3 shadow-lg max-w-sm">
+                <div className="flex items-start gap-2">
+                    <ArrowDownToLine className="h-4 w-4 text-foreground shrink-0 mt-0.5" />
+                    <div className="flex flex-col gap-0.5">
+                        <span className="text-[13px] font-medium text-foreground leading-snug">
+                            Update available
+                        </span>
+                        <span className="text-[11px] text-muted-foreground">
+                            SUSTN v{version} is ready to install.
+                        </span>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => toast.dismiss(id)}
+                        className="rounded-md border border-border px-2.5 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted"
+                    >
+                        Later
+                    </button>
+                    <button
+                        onClick={() => {
+                            onInstall();
+                            toast.dismiss(id);
+                            updateInstallingToast();
+                        }}
+                        className="flex items-center gap-1.5 rounded-md bg-foreground px-2.5 py-1 text-[12px] font-medium text-background transition-opacity hover:opacity-80"
+                    >
+                        <ArrowDownToLine className="h-3 w-3" />
+                        Install & Restart
+                    </button>
+                </div>
+            </div>
+        ),
+        { id: "update-available", duration: Infinity },
+    );
+}
+
+function updateInstallingToast() {
+    toast.custom(
+        () => (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-background p-3 shadow-lg max-w-sm">
+                <Loader2 className="h-4 w-4 text-foreground animate-spin shrink-0" />
+                <span className="text-[13px] font-medium text-foreground">
+                    Installing update...
+                </span>
+            </div>
+        ),
+        { id: "update-installing", duration: Infinity },
     );
 }
