@@ -17,7 +17,7 @@ export type TaskState =
     | "dismissed"
     | "failed";
 
-export type TaskSource = "manual" | "scan";
+export type TaskSource = "manual" | "scan" | "linear";
 export type EstimatedEffort = "low" | "medium" | "high";
 
 export interface Task {
@@ -44,6 +44,9 @@ export interface Task {
     lastError: string | undefined;
     startedAt: string | undefined;
     completedAt: string | undefined;
+    linearIssueId: string | undefined;
+    linearIdentifier: string | undefined;
+    linearUrl: string | undefined;
     createdAt: string;
     updatedAt: string;
 }

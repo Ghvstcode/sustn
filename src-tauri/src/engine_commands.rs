@@ -464,6 +464,92 @@ end tell"#,
     Ok(())
 }
 
+/// Augment imported tasks with codebase context using Claude CLI.
+/// Accepts a batch of tasks and returns enriched metadata for each.
+#[tauri::command]
+pub async fn engine_augment_tasks(
+    repo_path: String,
+    tasks: Vec<AugmentTaskInput>,
+) -> Result<Vec<AugmentTaskResult>, String> {
+    println!(
+        "[engine_augment_tasks] augmenting {} tasks for repo={}",
+        tasks.len(),
+        repo_path
+    );
+
+    // Collect source files for context
+    let context = scanner::collect_source_files(&repo_path)?;
+
+    // Build prompt with all tasks
+    let mut task_list = String::new();
+    for (i, t) in tasks.iter().enumerate() {
+        task_list.push_str(&format!(
+            "Task {}: {}\nDescription: {}\n\n",
+            i + 1,
+            t.title,
+            t.description.as_deref().unwrap_or("(no description)")
+        ));
+    }
+
+    let prompt = format!(
+        r#"You are analyzing tasks imported from an issue tracker in the context of a codebase.
+For each task below, analyze the codebase and return enriched metadata.
+
+{}
+
+Output ONLY a JSON array (one entry per task, same order) with no markdown formatting:
+[{{
+  "files_involved": ["path/to/file.ts"],
+  "estimated_effort": "low" | "medium" | "high",
+  "enriched_description": "Enhanced description with codebase context...",
+  "category": "feature" | "tech_debt" | "tests" | "docs" | "security" | "performance" | "dx" | "observability" | "general"
+}}]"#,
+        task_list
+    );
+
+    let result = engine::invoke_claude_cli(
+        &repo_path,
+        &prompt,
+        300, // 5 min timeout
+        Some(&context),
+        None,
+        None,
+    )
+    .await?;
+
+    if !result.success {
+        return Err(format!(
+            "Claude CLI failed: {}",
+            result.stderr
+        ));
+    }
+
+    // Parse the JSON array from stdout
+    let json_str = scanner::extract_json_array_raw(&result.stdout)
+        .ok_or_else(|| "Failed to extract JSON array from augmentation response".to_string())?;
+
+    let results: Vec<AugmentTaskResult> = serde_json::from_str(&json_str)
+        .map_err(|e| format!("Failed to parse augmentation results: {e}"))?;
+
+    Ok(results)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AugmentTaskInput {
+    pub title: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AugmentTaskResult {
+    pub files_involved: Vec<String>,
+    pub estimated_effort: String,
+    pub enriched_description: String,
+    pub category: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineStatusResponse {

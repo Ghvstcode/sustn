@@ -5,6 +5,7 @@ import {
     GitBranch,
     Clock,
     Wallet,
+    Plug,
     User,
 } from "lucide-react";
 import { useRepositories } from "@core/api/useRepositories";
@@ -38,6 +39,7 @@ const GLOBAL_SECTIONS: {
     { id: "git", label: "Git & Branches", icon: GitBranch },
     { id: "scheduling", label: "Scheduling", icon: Clock },
     { id: "budget", label: "Budget", icon: Wallet },
+    { id: "integrations", label: "Integrations", icon: Plug },
     { id: "account", label: "Account", icon: User },
 ];
 

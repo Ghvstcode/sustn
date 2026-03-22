@@ -3,6 +3,7 @@ import { GeneralSection } from "./sections/GeneralSection";
 import { GitBranchesSection } from "./sections/GitBranchesSection";
 import { SchedulingSection } from "./sections/SchedulingSection";
 import { BudgetSection } from "./sections/BudgetSection";
+import { IntegrationsSection } from "./sections/IntegrationsSection";
 import { AccountSection } from "./sections/AccountSection";
 import { ProjectSection } from "./sections/ProjectSection";
 
@@ -22,6 +23,7 @@ export function SettingsContent({
                 {activeSection === "git" && <GitBranchesSection />}
                 {activeSection === "scheduling" && <SchedulingSection />}
                 {activeSection === "budget" && <BudgetSection />}
+                {activeSection === "integrations" && <IntegrationsSection />}
                 {activeSection === "account" && <AccountSection />}
                 {activeSection.startsWith("project-") && (
                     <ProjectSection

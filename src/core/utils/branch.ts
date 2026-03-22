@@ -4,11 +4,15 @@ import type {
     GlobalSettings,
     ProjectOverrides,
 } from "@core/types/settings";
+import type { Task } from "@core/types/task";
 
 /**
  * Generate a git branch name from task data + user settings.
  *
- * Examples:
+ * For Linear-sourced tasks, uses the Linear identifier style:
+ *   "sustn/syn-460-improve-accounts-table-load-time"
+ *
+ * For other tasks:
  *   slug style:       "sustn/fix-auth-middleware-error"
  *   short-hash style: "sustn/d23cd321"
  *   task-id style:    "sustn/task-d23cd321"
@@ -18,6 +22,7 @@ export function generateBranchName(
     taskId: string,
     settings: GlobalSettings,
     overrides?: ProjectOverrides,
+    task?: Pick<Task, "source" | "linearIdentifier">,
 ): string {
     const prefixMode: BranchPrefixMode =
         overrides?.overrideBranchPrefixMode ?? settings.branchPrefixMode;
@@ -31,6 +36,17 @@ export function generateBranchName(
             : prefixMode === "custom"
               ? `${prefixCustom || "my"}/`
               : "";
+
+    // Linear-sourced tasks: use identifier-slug style (e.g., "syn-460-improve-accounts")
+    if (task?.source === "linear" && task.linearIdentifier) {
+        const identifier = task.linearIdentifier.toLowerCase();
+        // Strip the identifier prefix from the title if present (e.g., "SYN-460 Fix bug" → "Fix bug")
+        const titleWithoutId = taskTitle
+            .replace(new RegExp(`^${task.linearIdentifier}\\s*`, "i"), "")
+            .trim();
+        const slug = titleWithoutId ? `-${slugify(titleWithoutId)}` : "";
+        return `${prefix}${identifier}${slug}`;
+    }
 
     const shortId = taskId.slice(0, 8);
 

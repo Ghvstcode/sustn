@@ -31,6 +31,9 @@ interface TaskRow {
     branch_name: string | null;
     commit_sha: string | null;
     session_id: string | null;
+    linear_issue_id: string | null;
+    linear_identifier: string | null;
+    linear_url: string | null;
     tokens_used: number | null;
     retry_count: number | null;
     last_error: string | null;
@@ -104,6 +107,9 @@ function rowToTask(row: TaskRow): Task {
         branchName: row.branch_name ?? undefined,
         commitSha: row.commit_sha ?? undefined,
         sessionId: row.session_id ?? undefined,
+        linearIssueId: row.linear_issue_id ?? undefined,
+        linearIdentifier: row.linear_identifier ?? undefined,
+        linearUrl: row.linear_url ?? undefined,
         tokensUsed: row.tokens_used ?? 0,
         retryCount: row.retry_count ?? 0,
         lastError: row.last_error ?? undefined,
@@ -531,12 +537,104 @@ export async function createScannedTask(
 }
 
 /**
+ * Insert a single Linear-sourced task into the DB.
+ */
+export async function createLinearTask(
+    repositoryId: string,
+    task: {
+        title: string;
+        description: string | undefined;
+        category: string;
+        estimatedEffort: string;
+        filesInvolved?: string[];
+        linearIssueId: string;
+        linearIdentifier: string;
+        linearUrl: string;
+    },
+    sortOrder: number,
+    baseBranch?: string,
+): Promise<Task> {
+    const db = await getDb();
+    const id = await invoke<string>("generate_task_id");
+
+    await db.execute(
+        `INSERT INTO tasks (id, repository_id, title, description, category, sort_order, source, estimated_effort, files_involved, base_branch, linear_issue_id, linear_identifier, linear_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [
+            id,
+            repositoryId,
+            task.title,
+            task.description ?? null,
+            task.category,
+            sortOrder,
+            "linear",
+            task.estimatedEffort,
+            task.filesInvolved ? JSON.stringify(task.filesInvolved) : null,
+            baseBranch ?? null,
+            task.linearIssueId,
+            task.linearIdentifier,
+            task.linearUrl,
+        ],
+    );
+
+    await recordEvent(
+        db,
+        id,
+        "created",
+        undefined,
+        undefined,
+        undefined,
+        `Imported from Linear: ${task.linearIdentifier}`,
+    );
+
+    const rows = await db.select<TaskRow[]>(
+        "SELECT * FROM tasks WHERE id = $1",
+        [id],
+    );
+
+    return rowToTask(rows[0]);
+}
+
+/**
+ * Get the set of Linear issue IDs already imported for a repository (for dedup).
+ */
+export async function getLinearIssueIds(
+    repositoryId: string,
+): Promise<Set<string>> {
+    const db = await getDb();
+    const rows = await db.select<{ linear_issue_id: string }[]>(
+        "SELECT linear_issue_id FROM tasks WHERE repository_id = $1 AND linear_issue_id IS NOT NULL AND state IN ('pending', 'in_progress', 'review', 'failed')",
+        [repositoryId],
+    );
+    return new Set(rows.map((r) => r.linear_issue_id));
+}
+
+/**
+ * Fix Linear tasks that have a mismatched base_branch.
+ * Updates them to the correct branch so they appear in the task list.
+ */
+export async function fixOrphanedLinearTasks(
+    repositoryId: string,
+    correctBaseBranch?: string,
+): Promise<void> {
+    if (!correctBaseBranch) return;
+    const db = await getDb();
+    await db.execute(
+        `UPDATE tasks SET base_branch = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE repository_id = $2 AND source = 'linear'
+         AND base_branch IS NOT NULL AND base_branch != $1`,
+        [correctBaseBranch, repositoryId],
+    );
+}
+
+/**
  * Get the set of existing non-terminal task titles for dedup,
- * plus the current max sort_order.
+ * plus the current min/max sort_order.
  */
 export async function getDeduplicationContext(repositoryId: string): Promise<{
     existingTitles: Set<string>;
     maxSortOrder: number;
+    minSortOrder: number;
 }> {
     const db = await getDb();
 
@@ -549,14 +647,17 @@ export async function getDeduplicationContext(repositoryId: string): Promise<{
         existing.map((t) => t.title.toLowerCase().trim()),
     );
 
-    const maxOrderRows = await db.select<{ max_order: number | null }[]>(
-        "SELECT MAX(sort_order) as max_order FROM tasks WHERE repository_id = $1",
+    const orderRows = await db.select<
+        { max_order: number | null; min_order: number | null }[]
+    >(
+        "SELECT MAX(sort_order) as max_order, MIN(sort_order) as min_order FROM tasks WHERE repository_id = $1",
         [repositoryId],
     );
 
     return {
         existingTitles,
-        maxSortOrder: maxOrderRows[0]?.max_order ?? 0,
+        maxSortOrder: orderRows[0]?.max_order ?? 0,
+        minSortOrder: orderRows[0]?.min_order ?? 0,
     };
 }
 

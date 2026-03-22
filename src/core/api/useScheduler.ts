@@ -192,6 +192,7 @@ async function runSchedulerTick(
                 nextTask.id,
                 settings,
                 overrides,
+                nextTask,
             );
             const baseBranch = effectiveBaseBranch(
                 nextTask.baseBranch,

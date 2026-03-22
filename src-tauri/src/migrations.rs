@@ -251,5 +251,46 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "add Linear integration columns and sync config table",
+            sql: r#"
+                ALTER TABLE tasks ADD COLUMN linear_issue_id TEXT;
+                ALTER TABLE tasks ADD COLUMN linear_identifier TEXT;
+                ALTER TABLE tasks ADD COLUMN linear_url TEXT;
+
+                CREATE INDEX IF NOT EXISTS idx_tasks_linear_issue
+                    ON tasks(linear_issue_id) WHERE linear_issue_id IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS linear_sync_config (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                    linear_team_id TEXT NOT NULL,
+                    linear_team_name TEXT NOT NULL,
+                    linear_project_id TEXT,
+                    linear_project_name TEXT,
+                    auto_sync INTEGER NOT NULL DEFAULT 0,
+                    filter_labels TEXT,
+                    last_sync_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_linear_sync_repo
+                    ON linear_sync_config(repository_id);
+
+                INSERT OR IGNORE INTO global_settings (key, value) VALUES
+                    ('linear_api_key', ''),
+                    ('linear_enabled', 'false');
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 14,
+            description: "add sync_schedule to linear_sync_config",
+            sql: r#"
+                ALTER TABLE linear_sync_config ADD COLUMN sync_schedule TEXT NOT NULL DEFAULT 'manual';
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
