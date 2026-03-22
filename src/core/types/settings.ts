@@ -30,6 +30,10 @@ export interface GlobalSettings {
     // Budget
     budgetCeilingPercent: number;
     showBudgetInSidebar: boolean;
+
+    // Integrations
+    linearApiKey: string;
+    linearEnabled: boolean;
 }
 
 export interface ProjectOverrides {
@@ -48,5 +52,6 @@ export type SettingsSection =
     | "git"
     | "scheduling"
     | "budget"
+    | "integrations"
     | "account"
     | `project-${string}`;

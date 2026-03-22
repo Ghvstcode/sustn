@@ -434,6 +434,52 @@ fn parse_scan_output(output: &str) -> Result<Vec<ScannedTask>, String> {
     ))
 }
 
+/// Extract the raw JSON array substring from text that may contain surrounding prose.
+/// Returns the raw JSON string (including brackets).
+pub fn extract_json_array_raw(text: &str) -> Option<String> {
+    let start = text.find('[')?;
+    let mut depth = 0;
+    let mut end = None;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, ch) in text[start..].char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+
+        if ch == '\\' && in_string {
+            escape_next = true;
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+
+        if in_string {
+            continue;
+        }
+
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(start + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let end = end?;
+    Some(text[start..end].to_string())
+}
+
 /// Extract a JSON array from text that may contain surrounding prose.
 /// String-literal-aware: skips brackets inside JSON string values.
 fn extract_json_array(text: &str) -> Option<Vec<ScannedTask>> {

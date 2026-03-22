@@ -9,6 +9,7 @@ import {
 } from "@core/api/useEngine";
 import { useAuth } from "@core/api/useAuth";
 import { useScheduler } from "@core/api/useScheduler";
+import { useLinearAutoSync } from "@core/api/useLinear";
 import { startSessionTracking } from "@core/services/session-tracker";
 import { initNotificationPermission } from "@core/services/notifications";
 
@@ -21,6 +22,7 @@ export function AppShell() {
     useStartupRecovery();
     useStartupScan();
     useScheduler();
+    useLinearAutoSync();
     useQueueProcessor();
     useGlobalTaskNotifications();
 

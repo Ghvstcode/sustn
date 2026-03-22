@@ -489,6 +489,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                 task.id,
                 globalSettings,
                 projectOverrides,
+                task,
             );
 
         // Collect all user messages as context for the agent
@@ -568,6 +569,26 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                         role: "system",
                                         content: `Branch pushed and PR created: ${pr.url}`,
                                     });
+                                    // Link PR to Linear issue if applicable
+                                    if (
+                                        task.linearIssueId &&
+                                        globalSettings?.linearApiKey
+                                    ) {
+                                        void import("@core/services/linear")
+                                            .then((m) =>
+                                                m.addComment(
+                                                    globalSettings.linearApiKey,
+                                                    task.linearIssueId!,
+                                                    `PR created by [SUSTN](https://sustn.app): ${pr.url}`,
+                                                ),
+                                            )
+                                            .catch((err) =>
+                                                console.error(
+                                                    "[TaskDetailView] Linear link-back failed:",
+                                                    err,
+                                                ),
+                                            );
+                                    }
                                     handleUpdateState("done");
                                 },
                                 onError: (err) => {

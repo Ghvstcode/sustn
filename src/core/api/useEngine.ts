@@ -17,6 +17,7 @@ import {
     updateTask as dbUpdateTask,
 } from "@core/db/tasks";
 import { listRepositories } from "@core/db/repositories";
+import { addComment as addLinearComment } from "@core/services/linear";
 import type {
     BudgetConfig,
     BudgetStatus,
@@ -444,6 +445,29 @@ async function handleTaskResult(
                     }
                 } catch (prErr) {
                     console.error("[handleTaskResult] auto-PR failed:", prErr);
+                }
+            }
+
+            // Link PR back to Linear if this is a Linear-sourced task
+            if (prUrl) {
+                try {
+                    const task = await getTask(variables.taskId);
+                    if (task?.linearIssueId && settings.linearApiKey) {
+                        await addLinearComment(
+                            settings.linearApiKey,
+                            task.linearIssueId,
+                            `PR created by [SUSTN](https://sustn.app): ${prUrl}`,
+                        );
+                        console.log(
+                            "[handleTaskResult] linked PR to Linear issue:",
+                            task.linearIdentifier,
+                        );
+                    }
+                } catch (linearErr) {
+                    console.error(
+                        "[handleTaskResult] Linear link-back failed:",
+                        linearErr,
+                    );
                 }
             }
 

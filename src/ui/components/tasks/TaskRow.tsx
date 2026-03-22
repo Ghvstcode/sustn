@@ -271,6 +271,27 @@ export function TaskRow({
                                 </span>
                             )}
 
+                            {task.source === "linear" &&
+                                task.linearIdentifier && (
+                                    <Badge
+                                        variant="outline"
+                                        className="text-[10px] shrink-0 gap-1 font-mono cursor-pointer hover:bg-accent"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (task.linearUrl) {
+                                                void import("@tauri-apps/plugin-opener").then(
+                                                    (m) =>
+                                                        m.openUrl(
+                                                            task.linearUrl!,
+                                                        ),
+                                                );
+                                            }
+                                        }}
+                                    >
+                                        {task.linearIdentifier}
+                                    </Badge>
+                                )}
+
                             {task.category !== "general" &&
                                 categoryLabels[task.category] && (
                                     <Badge

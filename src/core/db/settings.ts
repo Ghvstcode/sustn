@@ -48,6 +48,8 @@ const KEY_MAP: Record<string, keyof GlobalSettings> = {
     scan_frequency: "scanFrequency",
     budget_ceiling_percent: "budgetCeilingPercent",
     show_budget_in_sidebar: "showBudgetInSidebar",
+    linear_api_key: "linearApiKey",
+    linear_enabled: "linearEnabled",
 };
 
 const REVERSE_KEY_MAP: Record<string, string> = Object.fromEntries(
@@ -60,6 +62,7 @@ const BOOLEAN_KEYS = new Set([
     "autoCreatePrs",
     "deleteBranchOnDismiss",
     "showBudgetInSidebar",
+    "linearEnabled",
 ]);
 
 function parseValue(camelKey: string, raw: string): unknown {
@@ -97,6 +100,8 @@ const DEFAULTS: GlobalSettings = {
     scanFrequency: "daily",
     budgetCeilingPercent: 75,
     showBudgetInSidebar: true,
+    linearApiKey: "",
+    linearEnabled: false,
 };
 
 export async function getGlobalSettings(): Promise<GlobalSettings> {

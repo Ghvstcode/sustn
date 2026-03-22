@@ -12,7 +12,7 @@ import {
     MoreHorizontal,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "@ui/components/ui/button";
 import { Input } from "@ui/components/ui/input";
 import {
@@ -155,6 +155,31 @@ export function TaskDetailHeader({
                     </TooltipProvider>
                 )}
             </div>
+
+            {/* Linear badge */}
+            {task.source === "linear" && task.linearIdentifier && (
+                <TooltipProvider>
+                    <Tooltip delayDuration={300}>
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (task.linearUrl) {
+                                        void openUrl(task.linearUrl);
+                                    }
+                                }}
+                                className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-mono text-muted-foreground hover:bg-muted transition-colors shrink-0"
+                            >
+                                <ExternalLink className="h-3 w-3 shrink-0 opacity-40" />
+                                {task.linearIdentifier}
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                            <p className="text-xs">Open in Linear</p>
+                        </TooltipContent>
+                    </Tooltip>
+                </TooltipProvider>
+            )}
 
             {/* Branch chip */}
             {task.branchName && (

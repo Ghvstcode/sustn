@@ -9,16 +9,27 @@ import {
 } from "@core/api/useSettings";
 import { useAgentConfig, useUpdateAgentConfig } from "@core/api/useEngine";
 import {
+    useLinearTeams,
+    useLinearProjects,
+    useLinearSyncConfigs,
+    useCreateLinearSyncConfig,
+    useDeleteLinearSyncConfig,
+    useUpdateSyncSchedule,
+    useSyncLinear,
+} from "@core/api/useLinear";
+import type { LinearSyncSchedule } from "@core/types/linear";
+import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
 } from "@ui/components/ui/select";
+import { Button } from "@ui/components/ui/button";
 import { Slider } from "@ui/components/ui/slider";
 import type { BranchPrefixMode } from "@core/types/settings";
 import type { ScheduleMode } from "@core/types/agent";
-import { Trash2, Clock, Zap, Hand } from "lucide-react";
+import { Trash2, Clock, Zap, Hand, RefreshCw, Loader2, X } from "lucide-react";
 
 interface ProjectSectionProps {
     repositoryId: string;
@@ -38,6 +49,20 @@ export function ProjectSection({
     const { mutate: updateAgentConfig } = useUpdateAgentConfig();
     const { mutate: doRemoveProject, isPending: isRemoving } =
         useRemoveProject();
+
+    // Linear sync
+    const { data: linearSyncConfigs } = useLinearSyncConfigs(repositoryId);
+    const { data: linearTeams } = useLinearTeams();
+    const { mutate: createSyncConfig, isPending: isCreatingSync } =
+        useCreateLinearSyncConfig();
+    const { mutate: deleteSyncConfig } = useDeleteLinearSyncConfig();
+    const { mutate: updateSchedule } = useUpdateSyncSchedule();
+    const { mutate: syncLinear, isPending: isSyncing } = useSyncLinear();
+    const [selectedTeamId, setSelectedTeamId] = useState<string>("");
+    const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+    const { data: linearProjects } = useLinearProjects(
+        selectedTeamId || undefined,
+    );
 
     const [showConfirmRemove, setShowConfirmRemove] = useState(false);
 
@@ -527,6 +552,231 @@ export function ProjectSection({
                     </div>
                 </div>
             </div>
+
+            {/* ── Linear Sync ── */}
+            {globalSettings.linearEnabled && globalSettings.linearApiKey && (
+                <div
+                    className="mt-8 animate-fade-in-up"
+                    style={{ animationDelay: "125ms" }}
+                >
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/50">
+                        Linear Sync
+                    </p>
+
+                    {/* Existing sync configs */}
+                    {linearSyncConfigs && linearSyncConfigs.length > 0 && (
+                        <div className="space-y-2 border-b border-border pb-5 pt-3">
+                            {linearSyncConfigs.map((sc) => (
+                                <div
+                                    key={sc.id}
+                                    className="rounded-md bg-muted/50 px-3 py-2.5"
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-medium text-foreground truncate">
+                                                {sc.linearTeamName}
+                                                {sc.linearProjectName
+                                                    ? ` / ${sc.linearProjectName}`
+                                                    : ""}
+                                            </p>
+                                            {sc.lastSyncAt && (
+                                                <p className="text-[11px] text-muted-foreground/60">
+                                                    Last synced{" "}
+                                                    {new Date(
+                                                        sc.lastSyncAt,
+                                                    ).toLocaleString()}
+                                                </p>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() =>
+                                                    syncLinear({
+                                                        syncConfig: sc,
+                                                        repositoryId,
+                                                        baseBranch:
+                                                            repo.defaultBranch,
+                                                    })
+                                                }
+                                                disabled={isSyncing}
+                                                className="h-7 px-2"
+                                            >
+                                                {isSyncing ? (
+                                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                                ) : (
+                                                    <RefreshCw className="h-3 w-3" />
+                                                )}
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() =>
+                                                    deleteSyncConfig({
+                                                        id: sc.id,
+                                                        repositoryId,
+                                                    })
+                                                }
+                                                className="h-7 px-2 text-muted-foreground/50 hover:text-destructive"
+                                            >
+                                                <X className="h-3 w-3" />
+                                            </Button>
+                                        </div>
+                                    </div>
+                                    {/* Schedule selector */}
+                                    <div className="mt-2 flex items-center gap-1">
+                                        {(
+                                            [
+                                                {
+                                                    value: "manual",
+                                                    label: "Manual",
+                                                },
+                                                {
+                                                    value: "on_start",
+                                                    label: "On launch",
+                                                },
+                                                {
+                                                    value: "6h",
+                                                    label: "Every 6h",
+                                                },
+                                                {
+                                                    value: "12h",
+                                                    label: "Every 12h",
+                                                },
+                                                {
+                                                    value: "daily",
+                                                    label: "Daily",
+                                                },
+                                            ] as const
+                                        ).map((opt) => {
+                                            const isSelected =
+                                                sc.syncSchedule === opt.value;
+                                            return (
+                                                <button
+                                                    key={opt.value}
+                                                    type="button"
+                                                    onClick={() =>
+                                                        updateSchedule({
+                                                            id: sc.id,
+                                                            schedule:
+                                                                opt.value as LinearSyncSchedule,
+                                                            repositoryId,
+                                                        })
+                                                    }
+                                                    className={`rounded px-2 py-0.5 text-[11px] transition-all duration-200 ${
+                                                        isSelected
+                                                            ? "bg-foreground text-background font-medium shadow-sm"
+                                                            : "text-muted-foreground/60 hover:text-foreground hover:bg-muted"
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Add new sync */}
+                    <div className="py-5">
+                        <p className="text-sm font-medium text-foreground">
+                            Add Linear team
+                        </p>
+                        <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+                            Import issues from a Linear team into this project.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <Select
+                                value={selectedTeamId}
+                                onValueChange={(v) => {
+                                    setSelectedTeamId(v);
+                                    setSelectedProjectId("");
+                                }}
+                            >
+                                <SelectTrigger className="w-[160px] h-8 text-xs">
+                                    <SelectValue placeholder="Select team" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {linearTeams?.map((t) => (
+                                        <SelectItem key={t.id} value={t.id}>
+                                            {t.name} ({t.key})
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+
+                            {selectedTeamId &&
+                                linearProjects &&
+                                linearProjects.length > 0 && (
+                                    <Select
+                                        value={selectedProjectId}
+                                        onValueChange={setSelectedProjectId}
+                                    >
+                                        <SelectTrigger className="w-[160px] h-8 text-xs">
+                                            <SelectValue placeholder="All issues" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="__all__">
+                                                All issues
+                                            </SelectItem>
+                                            {linearProjects.map((p) => (
+                                                <SelectItem
+                                                    key={p.id}
+                                                    value={p.id}
+                                                >
+                                                    {p.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                    const team = linearTeams?.find(
+                                        (t) => t.id === selectedTeamId,
+                                    );
+                                    if (!team) return;
+                                    const project = linearProjects?.find(
+                                        (p) => p.id === selectedProjectId,
+                                    );
+                                    createSyncConfig(
+                                        {
+                                            repositoryId,
+                                            linearTeamId: team.id,
+                                            linearTeamName: team.name,
+                                            linearProjectId:
+                                                selectedProjectId === "__all__"
+                                                    ? undefined
+                                                    : selectedProjectId ||
+                                                      undefined,
+                                            linearProjectName: project?.name,
+                                        },
+                                        {
+                                            onSuccess: () => {
+                                                setSelectedTeamId("");
+                                                setSelectedProjectId("");
+                                            },
+                                        },
+                                    );
+                                }}
+                                disabled={!selectedTeamId || isCreatingSync}
+                                className="h-8 text-xs"
+                            >
+                                {isCreatingSync ? (
+                                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                                ) : null}
+                                Add
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ── Instructions ── */}
             <div
