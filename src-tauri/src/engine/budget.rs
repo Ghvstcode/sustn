@@ -56,7 +56,7 @@ pub struct BudgetConfig {
 impl Default for BudgetConfig {
     fn default() -> Self {
         Self {
-            weekly_token_budget: 700_000,
+            weekly_token_budget: 5_000_000,
             max_usage_percent: 80,
             reserve_percent: 10,
             billing_mode: "subscription".to_string(),
@@ -143,14 +143,19 @@ pub fn get_weekly_usage() -> Result<(i64, String), String> {
 }
 
 /// Calculate the full budget status given a budget config.
+///
+/// Uses **daily mode**: compares today's usage against a daily budget (weekly / 7)
+/// instead of comparing weekly totals against the weekly budget. This prevents heavy
+/// usage earlier in the week from falsely exhausting the budget for remaining days —
+/// the actual subscription resets on rolling windows, not as a rigid weekly lump sum.
 pub fn calculate_budget_status(config: &BudgetConfig) -> BudgetStatus {
     let (tokens_today, _) = get_today_usage().unwrap_or((0, "unavailable".to_string()));
     let (tokens_week, source) = get_weekly_usage().unwrap_or((0, "unavailable".to_string()));
 
-    let max_for_sustn =
-        config.weekly_token_budget * (config.max_usage_percent as i64) / 100;
-    let reserve = config.weekly_token_budget * (config.reserve_percent as i64) / 100;
-    let available = (max_for_sustn - tokens_week - reserve).max(0);
+    let daily_budget = config.weekly_token_budget / 7;
+    let max_for_sustn = daily_budget * (config.max_usage_percent as i64) / 100;
+    let reserve = daily_budget * (config.reserve_percent as i64) / 100;
+    let available = (max_for_sustn - tokens_today - reserve).max(0);
 
     BudgetStatus {
         weekly_token_budget: config.weekly_token_budget,

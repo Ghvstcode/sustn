@@ -22,15 +22,13 @@ export function AiStatusCard() {
     const isEnabled = agentConfig?.enabled ?? true;
     const isExhausted = budget?.budgetExhausted ?? false;
 
-    // Budget bar calculation
-    const budgetCeiling = budget
-        ? (budget.weeklyTokenBudget * budget.maxUsagePercent) / 100
+    // Budget bar — uses daily budget (weekly / 7) to match backend calculation
+    const dailyBudget = budget
+        ? ((budget.weeklyTokenBudget / 7) * budget.maxUsagePercent) / 100
         : 0;
     const available = budget?.tokensAvailableForSustn ?? 0;
     const usedPercent =
-        budgetCeiling > 0
-            ? ((budgetCeiling - available) / budgetCeiling) * 100
-            : 0;
+        dailyBudget > 0 ? ((dailyBudget - available) / dailyBudget) * 100 : 0;
     const remainingPercent = 100 - usedPercent;
 
     // Bar color
@@ -46,7 +44,7 @@ export function AiStatusCard() {
     if (isExhausted) {
         icon = <AlertTriangle className="h-3 w-3 shrink-0 text-amber-500" />;
         line1 = "Budget limit";
-        line2 = "Resets Monday";
+        line2 = "Resets tomorrow";
     } else if (!isEnabled) {
         icon = (
             <svg

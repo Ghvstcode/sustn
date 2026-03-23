@@ -56,7 +56,7 @@ export function BudgetSection() {
                             />
                             <div className="flex items-center justify-between">
                                 <p className="text-sm font-medium text-foreground">
-                                    Use up to {ceiling}% of weekly budget
+                                    Use up to {ceiling}% of daily budget
                                 </p>
                                 <p className="text-[13px] text-muted-foreground">
                                     {reserved}% reserved for manual use
