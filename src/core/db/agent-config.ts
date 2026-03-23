@@ -165,7 +165,7 @@ export async function getBudgetConfig(): Promise<BudgetConfig> {
     }
 
     return {
-        weeklyTokenBudget: 700_000,
+        weeklyTokenBudget: 5_000_000,
         maxUsagePercent: 80,
         reservePercent: 10,
         billingMode: "subscription",

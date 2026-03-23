@@ -292,5 +292,15 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 15,
+            description: "increase default weekly_token_budget from 700k to 5M",
+            sql: r#"
+                UPDATE budget_config
+                SET weekly_token_budget = 5000000
+                WHERE weekly_token_budget = 700000;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
