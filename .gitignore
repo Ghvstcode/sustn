@@ -51,3 +51,5 @@ server/dist
 server/.env
 server/.dev.vars
 server/.wrangler
+
+.claude

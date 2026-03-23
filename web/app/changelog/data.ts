@@ -16,6 +16,29 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
     {
+        version: "0.3.0",
+        date: "Mar 23rd, 2026",
+        title: "Linear Integration",
+        description:
+            "Import issues from Linear as SUSTN tasks, with full lifecycle support from sync through execution to PR link-back.",
+        image: {
+            src: "/changelog/linear_integration.png",
+            alt: "Linear integration settings and task view",
+        },
+        features: [
+            "Linear issue import — sync issues from any Linear team and project as SUSTN tasks, with automatic category inference from labels and effort from priority",
+            "Configurable auto-sync schedules: manual, on launch, every 6h, 12h, or daily",
+            "New Integrations tab in Settings for Linear API key management, connection testing, and per-project sync configuration",
+            "Linear identifier badges on tasks (e.g. SYN-460), clickable to open the issue in Linear",
+            "Automatic PR link-back — when SUSTN creates a PR for a Linear issue, it posts a comment on the Linear issue with the PR link",
+        ],
+        improvements: [
+            "Linear-style branch names for imported issues (e.g. sustn/syn-460-improve-accounts-table)",
+            "Linear tasks sort to the top of the task list for higher visibility",
+            "Tauri-side scan command now returns Linear metadata (identifier, URL) for imported tasks",
+        ],
+    },
+    {
         version: "0.2.0",
         date: "Mar 18th, 2026",
         title: "New Diff Viewer & Inline Comments",
