@@ -1,3 +1,4 @@
+use crate::engine::git as engine_git;
 use serde::Serialize;
 use std::path::Path;
 
@@ -164,6 +165,11 @@ pub async fn git_pull(path: String) -> PullResult {
 #[tauri::command]
 pub fn generate_task_id() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+#[tauri::command]
+pub fn get_repo_default_branch(path: String) -> String {
+    engine_git::detect_default_branch(&path)
 }
 
 #[tauri::command]

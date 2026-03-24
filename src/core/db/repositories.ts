@@ -57,11 +57,14 @@ export async function addRepository(
         throw new Error("This project has already been added");
     }
 
-    const id = await invoke<string>("generate_repo_id");
+    const [id, defaultBranch] = await Promise.all([
+        invoke<string>("generate_repo_id"),
+        invoke<string>("get_repo_default_branch", { path }),
+    ]);
 
     await db.execute(
-        "INSERT INTO repositories (id, path, name) VALUES ($1, $2, $3)",
-        [id, path, name],
+        "INSERT INTO repositories (id, path, name, default_branch) VALUES ($1, $2, $3, $4)",
+        [id, path, name, defaultBranch],
     );
 
     const rows = await db.select<RepositoryRow[]>(

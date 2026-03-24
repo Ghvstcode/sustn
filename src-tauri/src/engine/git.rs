@@ -229,6 +229,34 @@ fn detect_environment_issue(stderr: &str) -> Option<EnvironmentIssue> {
     })
 }
 
+/// Detect the default branch for a repository.
+/// Tries `git symbolic-ref --short refs/remotes/origin/HEAD` first (works for
+/// repos with a remote), then falls back to the current branch name.
+pub fn detect_default_branch(cwd: &str) -> String {
+    // Try the remote HEAD pointer first — most reliable for cloned repos.
+    let result = run_git(cwd, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    if result.success {
+        // Output is e.g. "origin/main" — strip the "origin/" prefix.
+        let branch = result.output.trim().to_string();
+        let branch = branch.strip_prefix("origin/").unwrap_or(&branch).to_string();
+        if !branch.is_empty() {
+            return branch;
+        }
+    }
+
+    // Fall back to the current local branch.
+    let result = run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    if result.success {
+        let branch = result.output.trim().to_string();
+        // "HEAD" means the repo is in detached HEAD or has no commits yet.
+        if !branch.is_empty() && branch != "HEAD" {
+            return branch;
+        }
+    }
+
+    "main".to_string()
+}
+
 /// Generate a branch name for a task.
 pub fn task_branch_name(task_id: &str) -> String {
     // Use first 8 chars of UUID for readability
