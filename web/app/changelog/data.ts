@@ -16,6 +16,35 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
     {
+        version: "0.4.0",
+        date: "Mar 26th, 2026",
+        title: "Kanban Board & Task Filtering",
+        description:
+            "A new Kanban board view for visualizing tasks by status, plus powerful filtering and search to find exactly what you need.",
+        image: {
+            src: "/changelog/kanban_board.png",
+            alt: "Kanban board view with task columns",
+        },
+        features: [
+            "Kanban board view — visualize tasks across Pending, In Progress, Review, Done, Failed, and Dismissed columns with full drag-and-drop support",
+            "Task search — full-text search across task titles and descriptions, with `Cmd/Ctrl+F` keyboard shortcut",
+            "Advanced filtering — filter tasks by state, category (Feature, Tech Debt, Tests, Docs, Security, Performance, DX, Observability), and source (Manual, AI Scan, Linear)",
+            "View mode switcher — toggle between list view and Kanban board from the task toolbar",
+            "Update dialog — persistent modal when a new version is available, with 'Later' and 'Install & Restart' buttons and download progress spinner",
+            "App version display — current version (e.g. SUSTN v0.4.0) now shown in the Account section of Settings",
+        ],
+        improvements: [
+            "New task toolbar with integrated search, filter popover, and view toggle",
+            "Filter chips display dynamic counts per state for quick overview",
+            "Linear tasks now recognized as a distinct task source for filtering",
+        ],
+        fixes: [
+            "Default branch detection — repositories using `master` or non-standard default branches are now auto-detected when added, fixing branch creation failures",
+            "Budget calculation switched to daily mode — heavy usage on one day no longer exhausts the budget for the rest of the week",
+            "Default weekly token budget increased from 700K to 5M to match typical subscription capacity",
+        ],
+    },
+    {
         version: "0.3.0",
         date: "Mar 23rd, 2026",
         title: "Linear Integration",
