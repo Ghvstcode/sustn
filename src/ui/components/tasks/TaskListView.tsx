@@ -24,11 +24,17 @@ import { useScanNow, useDeepScanListener } from "@core/api/useEngine";
 import { listen } from "@tauri-apps/api/event";
 import { useAppStore } from "@core/store/app-store";
 import { useQueueStore } from "@core/store/queue-store";
-import type { TaskCategory, EstimatedEffort } from "@core/types/task";
+import type {
+    TaskCategory,
+    TaskState,
+    EstimatedEffort,
+} from "@core/types/task";
 import { TaskListHeader } from "./TaskListHeader";
 import { TaskRow } from "./TaskRow";
 import { AddTaskDialog } from "./AddTaskDialog";
 import { DiscoveryBanner } from "@ui/components/main/DiscoveryBanner";
+import { TaskToolbar, type ViewMode, type ActiveFilters } from "./TaskToolbar";
+import { KanbanBoard } from "./KanbanBoard";
 
 interface TaskListViewProps {
     repositoryId: string;
@@ -49,6 +55,13 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
     useDeepScanListener(repositoryId);
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [hoveredTaskId, setHoveredTaskId] = useState<string | null>(null);
+    const [viewMode, setViewMode] = useState<ViewMode>("list");
+    const [searchQuery, setSearchQuery] = useState("");
+    const [filters, setFilters] = useState<ActiveFilters>({
+        states: [],
+        categories: [],
+        sources: [],
+    });
 
     // Track deep scan (pass 2) via Tauri events
     const [isDeepScanning, setIsDeepScanning] = useState(false);
@@ -113,11 +126,60 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
         }
     }, [scanNow.isPending, scanTasksFound]);
 
+    // State counts for filter chips (computed from all tasks, before filtering)
+    const stateCounts = useMemo(() => {
+        const counts: Record<TaskState, number> = {
+            pending: 0,
+            in_progress: 0,
+            review: 0,
+            done: 0,
+            failed: 0,
+            dismissed: 0,
+        };
+        for (const t of tasks ?? []) {
+            counts[t.state]++;
+        }
+        return counts;
+    }, [tasks]);
+
+    // Apply filters + search to all tasks
+    const filteredTasks = useMemo(() => {
+        if (!tasks) return [];
+        const query = searchQuery.toLowerCase().trim();
+        return tasks.filter((t) => {
+            if (filters.states.length > 0 && !filters.states.includes(t.state))
+                return false;
+            if (
+                filters.categories.length > 0 &&
+                !filters.categories.includes(t.category)
+            )
+                return false;
+            if (
+                filters.sources.length > 0 &&
+                !filters.sources.includes(t.source)
+            )
+                return false;
+            if (
+                query &&
+                !t.title.toLowerCase().includes(query) &&
+                !(t.description ?? "").toLowerCase().includes(query)
+            )
+                return false;
+            return true;
+        });
+    }, [tasks, filters, searchQuery]);
+
+    // Queue position lookup map
+    const queuedTaskIds = useMemo(() => {
+        const map = new Map<string, number>();
+        queue.forEach((q, idx) => map.set(q.taskId, idx));
+        return map;
+    }, [queue]);
+
     const activeTasks = useMemo(() => {
-        const active =
-            tasks?.filter(
-                (t) => t.state !== "done" && t.state !== "dismissed",
-            ) ?? [];
+        const active = filteredTasks.filter(
+            (t) => t.state !== "done" && t.state !== "dismissed",
+        );
 
         const statePriority: Record<string, number> = {
             in_progress: 0,
@@ -146,14 +208,14 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
 
             return a.sortOrder - b.sortOrder;
         });
-    }, [tasks, queue]);
+    }, [filteredTasks, queue]);
 
     const doneTasks = useMemo(
         () =>
-            tasks?.filter(
+            filteredTasks.filter(
                 (t) => t.state === "done" || t.state === "dismissed",
-            ) ?? [],
-        [tasks],
+            ),
+        [filteredTasks],
     );
 
     const sensors = useSensors(
@@ -273,6 +335,8 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
         });
     }
 
+    const hasTasks = (tasks?.length ?? 0) > 0;
+
     return (
         <div className="flex h-full flex-col">
             <TaskListHeader
@@ -286,6 +350,19 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
                 onScan={handleScan}
             />
 
+            {/* Toolbar with view toggle + filters (only when tasks exist) */}
+            {hasTasks && (
+                <TaskToolbar
+                    viewMode={viewMode}
+                    onViewModeChange={setViewMode}
+                    filters={filters}
+                    onFiltersChange={setFilters}
+                    stateCounts={stateCounts}
+                    searchQuery={searchQuery}
+                    onSearchChange={setSearchQuery}
+                />
+            )}
+
             {/* Discovery banner */}
             <DiscoveryBanner
                 isScanning={scanNow.isPending}
@@ -293,7 +370,7 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
                 tasksFound={scanTasksFound}
             />
 
-            {activeTasks.length === 0 && doneTasks.length === 0 ? (
+            {!hasTasks ? (
                 <div className="flex flex-1 flex-col items-center pt-[28vh] text-center px-6">
                     {/* Spinning logo */}
                     <div className="animate-fade-in-up">
@@ -367,7 +444,17 @@ export function TaskListView({ repositoryId }: TaskListViewProps) {
                         <div className="h-full w-1/3 bg-foreground/30 rounded-full animate-slide-indeterminate" />
                     </div>
                 </div>
+            ) : viewMode === "board" ? (
+                /* ---- Board / Kanban view ---- */
+                <div className="flex-1 min-h-0">
+                    <KanbanBoard
+                        tasks={filteredTasks}
+                        onTaskClick={setSelectedTask}
+                        queuedTaskIds={queuedTaskIds}
+                    />
+                </div>
             ) : (
+                /* ---- List view (original) ---- */
                 <div
                     className="flex-1 overflow-y-auto"
                     onMouseLeave={() => setHoveredTaskId(null)}
