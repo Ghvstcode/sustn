@@ -80,6 +80,7 @@ pub fn run() {
             repository::validate_git_repo,
             repository::generate_repo_id,
             repository::generate_task_id,
+            repository::get_repo_default_branch,
             repository::clone_repository,
             repository::git_pull,
             repository::get_default_clone_dir,
