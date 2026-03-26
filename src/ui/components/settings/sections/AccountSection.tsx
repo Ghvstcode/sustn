@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "@core/store/auth-store";
 import { useClearAuth } from "@core/api/useAuth";
 import { usePreflightChecks } from "@core/api/usePreflightChecks";
+import { useAppVersion } from "@core/api/useAppVersion";
 import { CheckCircle2, XCircle, LogOut } from "lucide-react";
 
 function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
@@ -22,6 +23,7 @@ export function AccountSection() {
     const user = useAuthStore((s) => s.user);
     const { mutate: clearAuth, isPending } = useClearAuth();
     const { data: preflight } = usePreflightChecks();
+    const { data: appVersion } = useAppVersion();
 
     function handleSignOut() {
         clearAuth(undefined, {
@@ -138,6 +140,21 @@ export function AccountSection() {
                         {isPending ? "Signing out..." : "Sign out"}
                     </button>
                 </div>
+
+                {/* App version */}
+                {appVersion && (
+                    <div
+                        className="animate-fade-in-up border-t border-border mt-5 pt-5"
+                        style={{ animationDelay: "250ms" }}
+                    >
+                        <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/50">
+                            App version
+                        </p>
+                        <p className="text-sm text-foreground">
+                            SUSTN v{appVersion}
+                        </p>
+                    </div>
+                )}
             </div>
         </div>
     );

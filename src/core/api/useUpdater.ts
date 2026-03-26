@@ -1,16 +1,17 @@
-import { useEffect, useRef } from "react";
-import { check } from "@tauri-apps/plugin-updater";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { updateAvailableToast } from "@ui/lib/toast";
 
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
  * Checks for app updates on mount and every hour.
- * Shows a toast when a new version is available.
+ * Returns state for rendering an update dialog.
  */
 export function useUpdateChecker() {
     const checkedRef = useRef(false);
+    const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+    const [showDialog, setShowDialog] = useState(false);
 
     useEffect(() => {
         async function checkForUpdate() {
@@ -18,16 +19,14 @@ export function useUpdateChecker() {
                 const update = await check();
                 if (!update) return;
 
-                updateAvailableToast(update.version, () => {
-                    void update.downloadAndInstall().then(() => relaunch());
-                });
+                setAvailableUpdate(update);
+                setShowDialog(true);
             } catch (e) {
                 // Silently ignore — network errors, dev mode, etc.
                 console.debug("Update check failed:", e);
             }
         }
 
-        // Check once on mount (with a small delay so the app finishes loading)
         if (!checkedRef.current) {
             checkedRef.current = true;
             const initialTimeout = setTimeout(
@@ -35,7 +34,6 @@ export function useUpdateChecker() {
                 5000,
             );
 
-            // Then check periodically
             const interval = setInterval(
                 () => void checkForUpdate(),
                 CHECK_INTERVAL_MS,
@@ -47,4 +45,21 @@ export function useUpdateChecker() {
             };
         }
     }, []);
+
+    const handleInstall = useCallback(async () => {
+        if (!availableUpdate) return;
+        await availableUpdate.downloadAndInstall();
+        await relaunch();
+    }, [availableUpdate]);
+
+    const handleDismiss = useCallback(() => {
+        setShowDialog(false);
+    }, []);
+
+    return {
+        updateVersion: availableUpdate?.version ?? "",
+        showUpdateDialog: showDialog,
+        handleInstall,
+        handleDismiss,
+    };
 }

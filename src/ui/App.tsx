@@ -19,6 +19,7 @@ import { useOnboardingStatus } from "@core/api/useOnboarding";
 import { clearBadge } from "@core/services/notifications";
 import { useEnvironmentIssueListener } from "@core/api/useEngine";
 import { useUpdateChecker } from "@core/api/useUpdater";
+import { UpdateDialog } from "@ui/components/UpdateDialog";
 import { listen } from "@tauri-apps/api/event";
 import {
     QueryClient,
@@ -67,7 +68,8 @@ function AppContent() {
     const { mode } = useTheme();
     const navigate = useNavigate();
     useEnvironmentIssueListener();
-    useUpdateChecker();
+    const { updateVersion, showUpdateDialog, handleInstall, handleDismiss } =
+        useUpdateChecker();
 
     // Handle menu bar navigation events from Tauri
     useEffect(() => {
@@ -123,6 +125,12 @@ function AppContent() {
                     }
                 />
             </Routes>
+            <UpdateDialog
+                open={showUpdateDialog}
+                version={updateVersion}
+                onInstall={handleInstall}
+                onDismiss={handleDismiss}
+            />
             <Toaster
                 theme={resolvedTheme}
                 position="bottom-right"
