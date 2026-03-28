@@ -34,6 +34,10 @@ export interface GlobalSettings {
     // Integrations
     linearApiKey: string;
     linearEnabled: boolean;
+
+    // PR Lifecycle
+    prLifecycleEnabled: boolean;
+    maxReviewCycles: number;
 }
 
 export interface ProjectOverrides {

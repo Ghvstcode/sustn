@@ -97,6 +97,9 @@ pub fn run() {
             engine_commands::engine_get_diff_stat,
             engine_commands::engine_create_pr,
             engine_commands::engine_augment_tasks,
+            engine_commands::engine_address_review,
+            engine_commands::run_gh_api,
+            engine_commands::run_gh_api_post,
             engine_commands::run_terminal_command,
             command::set_dock_badge,
         ])

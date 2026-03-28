@@ -20,6 +20,16 @@ export type TaskState =
 export type TaskSource = "manual" | "scan" | "linear";
 export type EstimatedEffort = "low" | "medium" | "high";
 
+export type PrState =
+    | "opened"
+    | "in_review"
+    | "changes_requested"
+    | "addressing"
+    | "re_review_requested"
+    | "approved"
+    | "merged"
+    | "needs_human_attention";
+
 export interface Task {
     id: string;
     repositoryId: string;
@@ -47,6 +57,38 @@ export interface Task {
     linearIssueId: string | undefined;
     linearIdentifier: string | undefined;
     linearUrl: string | undefined;
+    prState: PrState | undefined;
+    prNumber: number | undefined;
+    prReviewCycles: number;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface PrReview {
+    id: string;
+    taskId: string;
+    githubReviewId: number;
+    reviewer: string;
+    state: "approved" | "changes_requested" | "commented" | "dismissed";
+    body: string | undefined;
+    submittedAt: string;
+    createdAt: string;
+}
+
+export interface PrComment {
+    id: string;
+    taskId: string;
+    githubCommentId: number;
+    inReplyToId: number | undefined;
+    reviewer: string;
+    body: string;
+    path: string | undefined;
+    line: number | undefined;
+    side: "LEFT" | "RIGHT" | undefined;
+    commitId: string | undefined;
+    classification: "actionable" | "conversational" | "resolved" | undefined;
+    ourReply: string | undefined;
+    addressedInCommit: string | undefined;
     createdAt: string;
     updatedAt: string;
 }

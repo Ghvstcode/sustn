@@ -50,6 +50,8 @@ const KEY_MAP: Record<string, keyof GlobalSettings> = {
     show_budget_in_sidebar: "showBudgetInSidebar",
     linear_api_key: "linearApiKey",
     linear_enabled: "linearEnabled",
+    pr_lifecycle_enabled: "prLifecycleEnabled",
+    max_review_cycles: "maxReviewCycles",
 };
 
 const REVERSE_KEY_MAP: Record<string, string> = Object.fromEntries(
@@ -63,6 +65,7 @@ const BOOLEAN_KEYS = new Set([
     "deleteBranchOnDismiss",
     "showBudgetInSidebar",
     "linearEnabled",
+    "prLifecycleEnabled",
 ]);
 
 function parseValue(camelKey: string, raw: string): unknown {
@@ -70,6 +73,7 @@ function parseValue(camelKey: string, raw: string): unknown {
     if (camelKey === "scheduleDays")
         return raw ? (raw.split(",") as ScheduleDay[]) : [];
     if (camelKey === "budgetCeilingPercent") return parseInt(raw, 10);
+    if (camelKey === "maxReviewCycles") return parseInt(raw, 10);
     return raw;
 }
 
@@ -102,6 +106,8 @@ const DEFAULTS: GlobalSettings = {
     showBudgetInSidebar: true,
     linearApiKey: "",
     linearEnabled: false,
+    prLifecycleEnabled: true,
+    maxReviewCycles: 5,
 };
 
 export async function getGlobalSettings(): Promise<GlobalSettings> {

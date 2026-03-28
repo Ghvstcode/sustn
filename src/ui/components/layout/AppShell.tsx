@@ -11,6 +11,7 @@ import {
 import { useAuth } from "@core/api/useAuth";
 import { useScheduler } from "@core/api/useScheduler";
 import { useLinearAutoSync } from "@core/api/useLinear";
+import { usePrLifecyclePoller } from "@core/api/usePrLifecycle";
 import { startSessionTracking } from "@core/services/session-tracker";
 import { initNotificationPermission } from "@core/services/notifications";
 
@@ -24,6 +25,7 @@ export function AppShell() {
     useStartupScan();
     useScheduler();
     useLinearAutoSync();
+    usePrLifecyclePoller();
     useQueueProcessor();
     useGlobalTaskNotifications();
 

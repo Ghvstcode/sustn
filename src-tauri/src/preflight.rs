@@ -51,6 +51,11 @@ fn resolve_gh_binary() -> String {
     resolve_binary("gh", &[])
 }
 
+/// Public accessor for use in engine_commands
+pub fn resolve_gh_binary_pub() -> String {
+    resolve_gh_binary()
+}
+
 fn resolve_git_binary() -> String {
     resolve_binary("git", &[PathBuf::from("/usr/bin/git")])
 }

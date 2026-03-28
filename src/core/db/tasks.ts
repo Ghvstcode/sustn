@@ -7,6 +7,7 @@ import type {
     TaskState,
     TaskSource,
     EstimatedEffort,
+    PrState,
     TaskEvent,
     TaskMessage,
     MessageRole,
@@ -34,6 +35,9 @@ interface TaskRow {
     linear_issue_id: string | null;
     linear_identifier: string | null;
     linear_url: string | null;
+    pr_state: string | null;
+    pr_number: number | null;
+    pr_review_cycles: number | null;
     tokens_used: number | null;
     retry_count: number | null;
     last_error: string | null;
@@ -110,6 +114,9 @@ function rowToTask(row: TaskRow): Task {
         linearIssueId: row.linear_issue_id ?? undefined,
         linearIdentifier: row.linear_identifier ?? undefined,
         linearUrl: row.linear_url ?? undefined,
+        prState: (row.pr_state as PrState) ?? undefined,
+        prNumber: row.pr_number ?? undefined,
+        prReviewCycles: row.pr_review_cycles ?? 0,
         tokensUsed: row.tokens_used ?? 0,
         retryCount: row.retry_count ?? 0,
         lastError: row.last_error ?? undefined,
@@ -233,6 +240,7 @@ const fieldEventTypes: Record<string, string> = {
     notes: "notes_change",
     prUrl: "pr_url_change",
     category: "category_change",
+    prState: "pr_state_change",
 };
 
 // Field name to DB column mapping
@@ -243,6 +251,7 @@ const fieldToColumn: Record<string, string> = {
     notes: "notes",
     prUrl: "pr_url",
     category: "category",
+    prState: "pr_state",
 };
 
 export async function updateTask(
@@ -265,6 +274,9 @@ export async function updateTask(
             | "startedAt"
             | "completedAt"
             | "filesInvolved"
+            | "prState"
+            | "prNumber"
+            | "prReviewCycles"
         >
     >,
 ): Promise<Task> {
@@ -340,6 +352,18 @@ export async function updateTask(
     if (fields.filesInvolved !== undefined) {
         setClauses.push(`files_involved = $${paramIndex++}`);
         values.push(JSON.stringify(fields.filesInvolved));
+    }
+    if (fields.prState !== undefined) {
+        setClauses.push(`pr_state = $${paramIndex++}`);
+        values.push(fields.prState);
+    }
+    if (fields.prNumber !== undefined) {
+        setClauses.push(`pr_number = $${paramIndex++}`);
+        values.push(fields.prNumber);
+    }
+    if (fields.prReviewCycles !== undefined) {
+        setClauses.push(`pr_review_cycles = $${paramIndex++}`);
+        values.push(fields.prReviewCycles);
     }
 
     setClauses.push(`updated_at = CURRENT_TIMESTAMP`);

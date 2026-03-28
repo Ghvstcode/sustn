@@ -17,6 +17,7 @@ import {
 import { shouldWorkNow, isScanDue } from "@core/services/scheduler";
 import { generateBranchName, effectiveBaseBranch } from "@core/utils/branch";
 import { getProjectOverrides } from "@core/db/settings";
+import { parseOwnerRepo } from "@core/services/github";
 import {
     sendNotification,
     playSound,
@@ -255,6 +256,8 @@ async function runSchedulerTick(
                     }
                 }
 
+                const prMeta = prUrl ? parseOwnerRepo(prUrl) : undefined;
+
                 await dbUpdateTask(nextTask.id, {
                     state: prUrl ? "done" : "review",
                     baseBranch,
@@ -262,6 +265,12 @@ async function runSchedulerTick(
                     commitSha: result.commitSha,
                     completedAt: new Date().toISOString(),
                     ...(prUrl ? { prUrl } : {}),
+                    ...(prMeta
+                        ? {
+                              prState: "opened" as const,
+                              prNumber: prMeta.number,
+                          }
+                        : {}),
                 });
 
                 if (settings.notificationsEnabled) {

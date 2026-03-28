@@ -15,10 +15,52 @@ import {
 } from "lucide-react";
 import { Badge } from "@ui/components/ui/badge";
 import { useUpdateTask } from "@core/api/useTasks";
-import type { Task, TaskCategory } from "@core/types/task";
+import type { Task, TaskCategory, PrState } from "@core/types/task";
 import { TaskRowActions } from "./TaskRowActions";
 import { InlineCommentInput } from "./InlineCommentInput";
 import { InlineTaskEditor } from "./InlineTaskEditor";
+
+function prStateLabel(state: PrState): string {
+    switch (state) {
+        case "opened":
+            return "PR Open";
+        case "in_review":
+            return "In Review";
+        case "changes_requested":
+            return "Changes Req.";
+        case "addressing":
+            return "Addressing...";
+        case "re_review_requested":
+            return "Re-review";
+        case "approved":
+            return "Approved";
+        case "merged":
+            return "Merged";
+        case "needs_human_attention":
+            return "Needs Attention";
+        default:
+            return state;
+    }
+}
+
+function prStateBadgeClass(state: PrState): string {
+    switch (state) {
+        case "opened":
+        case "in_review":
+        case "re_review_requested":
+            return "border-blue-400/50 text-blue-500";
+        case "changes_requested":
+            return "border-amber-400/50 text-amber-500";
+        case "addressing":
+            return "border-violet-400/50 text-violet-500";
+        case "approved":
+            return "border-green-400/50 text-green-500";
+        case "needs_human_attention":
+            return "border-red-400/50 text-red-500";
+        default:
+            return "";
+    }
+}
 
 interface TaskRowProps {
     task: Task;
@@ -291,6 +333,16 @@ export function TaskRow({
                                         {task.linearIdentifier}
                                     </Badge>
                                 )}
+
+                            {task.prState && task.prState !== "merged" && (
+                                <Badge
+                                    variant="outline"
+                                    className={`text-[10px] shrink-0 gap-1 ${prStateBadgeClass(task.prState)}`}
+                                >
+                                    <GitPullRequest className="h-2.5 w-2.5" />
+                                    {prStateLabel(task.prState)}
+                                </Badge>
+                            )}
 
                             {task.category !== "general" &&
                                 categoryLabels[task.category] && (

@@ -302,5 +302,58 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 16,
+            description: "add PR lifecycle management tables and columns",
+            sql: r#"
+                ALTER TABLE tasks ADD COLUMN pr_state TEXT;
+                ALTER TABLE tasks ADD COLUMN pr_number INTEGER;
+                ALTER TABLE tasks ADD COLUMN pr_review_cycles INTEGER DEFAULT 0;
+
+                CREATE TABLE IF NOT EXISTS pr_reviews (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    github_review_id INTEGER NOT NULL,
+                    reviewer TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    body TEXT,
+                    submitted_at DATETIME NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pr_reviews_task
+                    ON pr_reviews(task_id);
+
+                CREATE TABLE IF NOT EXISTS pr_comments (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    github_comment_id INTEGER NOT NULL,
+                    in_reply_to_id INTEGER,
+                    reviewer TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    path TEXT,
+                    line INTEGER,
+                    side TEXT,
+                    commit_id TEXT,
+                    classification TEXT,
+                    our_reply TEXT,
+                    addressed_in_commit TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pr_comments_task
+                    ON pr_comments(task_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_comments_github_id
+                    ON pr_comments(github_comment_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_reviews_github_id
+                    ON pr_reviews(github_review_id);
+
+                INSERT OR IGNORE INTO global_settings (key, value) VALUES
+                    ('pr_lifecycle_enabled', 'true'),
+                    ('max_review_cycles', '5');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

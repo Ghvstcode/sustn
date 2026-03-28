@@ -561,9 +561,20 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                             },
                             {
                                 onSuccess: (pr) => {
+                                    const prMatch =
+                                        pr.url.match(/\/pull\/(\d+)/);
+                                    const prNumber = prMatch
+                                        ? parseInt(prMatch[1], 10)
+                                        : undefined;
                                     updateTask.mutate({
                                         id: taskId,
                                         prUrl: pr.url,
+                                        ...(prNumber
+                                            ? {
+                                                  prState: "opened" as const,
+                                                  prNumber,
+                                              }
+                                            : {}),
                                     });
                                     sendMessage.mutate({
                                         taskId,
