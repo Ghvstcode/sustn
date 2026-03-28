@@ -19,6 +19,13 @@ const DB_URL: &str = "sqlite:sustn.db";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Migrate any existing GitHub token from SQLite → OS credential store
+    // before the SQL plugin applies migration 13 (which drops the column).
+    if let Some(data_dir) = dirs::data_dir() {
+        let db_path = data_dir.join("app.sustn.desktop").join("sustn.db");
+        auth::migrate_token_to_keyring(&db_path);
+    }
+
     let migrations = migrations::migrations();
     let engine_state = engine::EngineState::new();
 
@@ -73,6 +80,9 @@ pub fn run() {
             command::greet,
             command::open_in_app,
             auth::generate_auth_id,
+            auth::set_github_token,
+            auth::get_github_token,
+            auth::clear_github_token,
             preflight::check_git_installed,
             preflight::check_claude_installed,
             preflight::check_claude_authenticated,

@@ -251,5 +251,13 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "move github_access_token to OS credential store",
+            sql: r#"
+                ALTER TABLE auth DROP COLUMN github_access_token;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
