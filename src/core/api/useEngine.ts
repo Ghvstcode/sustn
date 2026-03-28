@@ -475,7 +475,7 @@ async function handleTaskResult(
             const prMeta = prUrl ? parseOwnerRepo(prUrl) : undefined;
 
             await dbUpdateTaskWithRetry(variables.taskId, {
-                state: prUrl ? ("done" as const) : ("review" as const),
+                state: "review" as const,
                 baseBranch: variables.baseBranch,
                 branchName: result.branchName,
                 commitSha: result.commitSha,

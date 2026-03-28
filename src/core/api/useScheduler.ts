@@ -259,7 +259,7 @@ async function runSchedulerTick(
                 const prMeta = prUrl ? parseOwnerRepo(prUrl) : undefined;
 
                 await dbUpdateTask(nextTask.id, {
-                    state: prUrl ? "done" : "review",
+                    state: "review",
                     baseBranch,
                     branchName: result.branchName,
                     commitSha: result.commitSha,

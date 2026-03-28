@@ -661,7 +661,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                                 ),
                                             );
                                     }
-                                    handleUpdateState("done");
+                                    // Task stays in "review" — PR lifecycle drives transition to "done"
                                 },
                                 onError: (err) => {
                                     sendMessage.mutate({
@@ -669,7 +669,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                         role: "system",
                                         content: `Branch ${task.branchName} pushed to remote. PR creation failed: ${err instanceof Error ? err.message : String(err)}. Create it manually.`,
                                     });
-                                    handleUpdateState("done");
+                                    // Task stays in "review" even on PR failure
                                 },
                             },
                         );
@@ -804,18 +804,21 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     let sidebarActions: React.ReactNode = null;
 
     if (state === "review") {
+        const hasPr = !!task.prUrl;
         sidebarActions = (
             <>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className={btnClass}
-                    onClick={handleRequestChanges}
-                >
-                    <MessageSquarePlus className="h-3.5 w-3.5" />
-                    Request Changes
-                </Button>
-                {task.branchName && !task.prUrl ? (
+                {!hasPr && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className={btnClass}
+                        onClick={handleRequestChanges}
+                    >
+                        <MessageSquarePlus className="h-3.5 w-3.5" />
+                        Request Changes
+                    </Button>
+                )}
+                {task.branchName && !hasPr ? (
                     <Button
                         size="sm"
                         className={btnClass}
@@ -829,28 +832,36 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                         )}
                         Approve & Create PR
                     </Button>
-                ) : (
+                ) : hasPr ? (
                     <>
                         <Button
                             size="sm"
+                            variant="outline"
+                            className={btnClass}
+                            onClick={() => void openUrl(task.prUrl!)}
+                        >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            View PR
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="ghost"
                             className={btnClass}
                             onClick={() => handleUpdateState("done")}
                         >
                             <CheckCircle2 className="h-3.5 w-3.5" />
-                            Approve
+                            Mark Done
                         </Button>
-                        {task.prUrl && (
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                className={btnClass}
-                                onClick={() => void openUrl(task.prUrl!)}
-                            >
-                                <ExternalLink className="h-3.5 w-3.5" />
-                                View PR
-                            </Button>
-                        )}
                     </>
+                ) : (
+                    <Button
+                        size="sm"
+                        className={btnClass}
+                        onClick={() => handleUpdateState("done")}
+                    >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Approve
+                    </Button>
                 )}
             </>
         );

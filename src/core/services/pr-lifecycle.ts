@@ -124,14 +124,22 @@ export async function processTaskPr(
 
     if (prStatus.merged) {
         console.log(`[pr-lifecycle] PR #${prNumber} merged!`);
-        await updateTask(task.id, { prState: "merged" as PrState });
+        await updateTask(task.id, {
+            prState: "merged" as PrState,
+            state: "done",
+            completedAt: new Date().toISOString(),
+        });
         await recordPrEvent(task.id, "pr_merged", `PR #${prNumber} merged`);
         return;
     }
 
     if (prStatus.state === "closed") {
         console.log(`[pr-lifecycle] PR #${prNumber} closed without merge`);
-        await updateTask(task.id, { prState: "merged" as PrState }); // terminal
+        await updateTask(task.id, {
+            prState: "merged" as PrState,
+            state: "done",
+            completedAt: new Date().toISOString(),
+        });
         return;
     }
 
@@ -177,7 +185,11 @@ export async function processTaskPr(
         console.log(
             `[pr-lifecycle] PR #${prNumber} approved by @${latestReview.user.login}`,
         );
-        await updateTask(task.id, { prState: "approved" as PrState });
+        await updateTask(task.id, {
+            prState: "approved" as PrState,
+            state: "done",
+            completedAt: new Date().toISOString(),
+        });
         await recordPrEvent(
             task.id,
             "pr_approved",
