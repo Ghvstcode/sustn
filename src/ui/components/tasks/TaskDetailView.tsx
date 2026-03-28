@@ -47,6 +47,7 @@ import { TaskFilesInvolved } from "./TaskFilesInvolved";
 import { TaskStatusBanner } from "./TaskStatusBanner";
 import { queuedToast } from "@ui/lib/toast";
 import { FileContentViewer } from "./FileContentViewer";
+import { ErrorBoundary } from "@ui/components/ErrorBoundary";
 
 // ── Constants ───────────────────────────────────────────────
 
@@ -874,17 +875,22 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                     {isShowingDiff ? (
                         diffText ? (
                             <div className="px-6 pt-4 pb-8">
-                                <TaskDiffViewer
-                                    diffText={diffText}
-                                    singleFile={activeTab}
-                                    comments={inlineComments}
-                                    onAddComment={
-                                        task.state === "review"
-                                            ? handleAddComment
-                                            : undefined
-                                    }
-                                    onRemoveComment={handleRemoveComment}
-                                />
+                                <ErrorBoundary
+                                    level="widget"
+                                    heading="Diff viewer crashed"
+                                >
+                                    <TaskDiffViewer
+                                        diffText={diffText}
+                                        singleFile={activeTab}
+                                        comments={inlineComments}
+                                        onAddComment={
+                                            task.state === "review"
+                                                ? handleAddComment
+                                                : undefined
+                                        }
+                                        onRemoveComment={handleRemoveComment}
+                                    />
+                                </ErrorBoundary>
                             </div>
                         ) : (
                             <div className="flex h-32 items-center justify-center">
