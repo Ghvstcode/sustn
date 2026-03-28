@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { PatchDiff } from "@pierre/diffs/react";
 import type { DiffLineAnnotation, AnnotationSide } from "@pierre/diffs/react";
 import type { SelectedLineRange } from "@pierre/diffs";
-import { Columns2, Rows3, MessageSquare, X, Send } from "lucide-react";
+import { Columns2, Rows3, MessageSquare, X, Send, Reply } from "lucide-react";
 import { Button } from "@ui/components/ui/button";
 
 // ── Types ───────────────────────────────────────────────────
@@ -15,13 +15,29 @@ export interface InlineComment {
     fileName?: string;
 }
 
+export interface GitHubPrComment {
+    id: string;
+    githubCommentId: number;
+    reviewer: string;
+    body: string;
+    path?: string;
+    line?: number;
+    side?: "LEFT" | "RIGHT";
+    classification?: "actionable" | "conversational" | "resolved";
+    ourReply?: string;
+    addressedInCommit?: string;
+    createdAt: string;
+}
+
 interface TaskDiffViewerProps {
     diffText: string;
     activeFile?: string;
     singleFile?: string;
     comments?: InlineComment[];
+    ghComments?: GitHubPrComment[];
     onAddComment?: (comment: Omit<InlineComment, "id">) => void;
     onRemoveComment?: (id: string) => void;
+    onReplyToGhComment?: (commentId: number, body: string) => void;
 }
 
 // ── Annotation metadata type ────────────────────────────────
@@ -29,6 +45,12 @@ interface TaskDiffViewerProps {
 interface CommentAnnotation {
     commentId: string;
     text: string;
+    isGitHub?: boolean;
+    reviewer?: string;
+    classification?: string;
+    ourReply?: string;
+    githubCommentId?: number;
+    addressedInCommit?: string;
 }
 
 // ── Inline comment form ─────────────────────────────────────
@@ -132,14 +154,152 @@ function CommentBubble({
     );
 }
 
+// ── GitHub PR comment bubble ────────────────────────────────
+
+function GitHubCommentBubble({
+    reviewer,
+    text,
+    classification,
+    ourReply,
+    addressedInCommit,
+    onReply,
+}: {
+    reviewer: string;
+    text: string;
+    classification?: string;
+    ourReply?: string;
+    addressedInCommit?: string;
+    onReply?: (body: string) => void;
+}) {
+    const [showReply, setShowReply] = useState(false);
+    const [replyText, setReplyText] = useState("");
+    const replyRef = useRef<HTMLTextAreaElement>(null);
+
+    useEffect(() => {
+        if (showReply) replyRef.current?.focus();
+    }, [showReply]);
+
+    const isResolved = !!addressedInCommit || classification === "resolved";
+
+    return (
+        <div
+            className={`flex flex-col gap-1.5 px-3 py-2 border rounded-lg max-w-md w-full ${
+                isResolved
+                    ? "bg-green-50/50 dark:bg-green-950/20 border-green-200/60 dark:border-green-800/40"
+                    : "bg-blue-50/80 dark:bg-blue-950/30 border-blue-200/60 dark:border-blue-800/40"
+            }`}
+        >
+            <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400">
+                    @{reviewer}
+                </span>
+                {classification && (
+                    <span
+                        className={`text-[9px] px-1 py-0.5 rounded ${
+                            classification === "actionable"
+                                ? "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300"
+                                : classification === "resolved"
+                                  ? "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300"
+                                  : "bg-muted text-muted-foreground"
+                        }`}
+                    >
+                        {classification}
+                    </span>
+                )}
+                {isResolved && (
+                    <span className="text-[9px] text-green-600 dark:text-green-400">
+                        Addressed
+                    </span>
+                )}
+            </div>
+            <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">
+                {text}
+            </p>
+            {ourReply && (
+                <div className="mt-1 pl-2 border-l-2 border-blue-300 dark:border-blue-700">
+                    <p className="text-[11px] text-muted-foreground italic">
+                        {ourReply}
+                    </p>
+                </div>
+            )}
+            {onReply && !ourReply && !showReply && (
+                <button
+                    type="button"
+                    onClick={() => setShowReply(true)}
+                    className="flex items-center gap-1 text-[10px] text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 self-start"
+                >
+                    <Reply className="h-3 w-3" />
+                    Reply
+                </button>
+            )}
+            {showReply && (
+                <div className="flex flex-col gap-1 mt-1">
+                    <textarea
+                        ref={replyRef}
+                        value={replyText}
+                        onChange={(e) => setReplyText(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                e.preventDefault();
+                                if (replyText.trim() && onReply) {
+                                    onReply(replyText.trim());
+                                    setShowReply(false);
+                                    setReplyText("");
+                                }
+                            }
+                            if (e.key === "Escape") {
+                                setShowReply(false);
+                                setReplyText("");
+                            }
+                        }}
+                        placeholder="Reply to this comment..."
+                        rows={2}
+                        className="w-full resize-none rounded border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                    <div className="flex gap-1 justify-end">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 text-[10px] px-1.5"
+                            onClick={() => {
+                                setShowReply(false);
+                                setReplyText("");
+                            }}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            size="sm"
+                            className="h-5 text-[10px] px-1.5 gap-1"
+                            onClick={() => {
+                                if (replyText.trim() && onReply) {
+                                    onReply(replyText.trim());
+                                    setShowReply(false);
+                                    setReplyText("");
+                                }
+                            }}
+                            disabled={!replyText.trim()}
+                        >
+                            <Send className="h-2.5 w-2.5" />
+                            Reply
+                        </Button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 // ── Main diff viewer ───────────────────────────────────────
 
 export function TaskDiffViewer({
     diffText,
     singleFile,
     comments = [],
+    ghComments = [],
     onAddComment,
     onRemoveComment,
+    onReplyToGhComment,
 }: TaskDiffViewerProps) {
     const [diffStyle, setDiffStyle] = useState<"unified" | "split">("unified");
     const [selectedLines, setSelectedLines] =
@@ -190,11 +350,11 @@ export function TaskDiffViewer({
         return (diffText.match(/^diff --git/gm) ?? []).length;
     }, [diffText]);
 
-    // Build annotation list from comments
+    // Build annotation list from local comments + GitHub PR comments
     const lineAnnotations = useMemo<
         DiffLineAnnotation<CommentAnnotation>[]
     >(() => {
-        return comments
+        const local = comments
             .filter((c) => {
                 if (!singleFile) return true;
                 return !c.fileName || c.fileName === singleFile;
@@ -204,7 +364,32 @@ export function TaskDiffViewer({
                 lineNumber: c.lineNumber,
                 metadata: { commentId: c.id, text: c.text },
             }));
-    }, [comments, singleFile]);
+
+        const github = ghComments
+            .filter((c) => {
+                if (!c.path || !c.line) return false;
+                if (!singleFile) return true;
+                return c.path === singleFile;
+            })
+            .map((c) => ({
+                side: (c.side === "LEFT"
+                    ? "deletions"
+                    : "additions") as AnnotationSide,
+                lineNumber: c.line!,
+                metadata: {
+                    commentId: `gh-${c.githubCommentId}`,
+                    text: c.body,
+                    isGitHub: true,
+                    reviewer: c.reviewer,
+                    classification: c.classification,
+                    ourReply: c.ourReply,
+                    githubCommentId: c.githubCommentId,
+                    addressedInCommit: c.addressedInCommit,
+                },
+            }));
+
+        return [...local, ...github];
+    }, [comments, ghComments, singleFile]);
 
     // Include the "new comment" form as an annotation too
     const allAnnotations = useMemo<
@@ -270,6 +455,32 @@ export function TaskDiffViewer({
                 );
             }
 
+            // GitHub PR comment
+            if (annotation.metadata.isGitHub) {
+                return (
+                    <GitHubCommentBubble
+                        reviewer={annotation.metadata.reviewer ?? "unknown"}
+                        text={annotation.metadata.text}
+                        classification={annotation.metadata.classification}
+                        ourReply={annotation.metadata.ourReply}
+                        addressedInCommit={
+                            annotation.metadata.addressedInCommit
+                        }
+                        onReply={
+                            onReplyToGhComment &&
+                            annotation.metadata.githubCommentId
+                                ? (body) =>
+                                      onReplyToGhComment(
+                                          annotation.metadata.githubCommentId!,
+                                          body,
+                                      )
+                                : undefined
+                        }
+                    />
+                );
+            }
+
+            // Local SUSTN comment
             return (
                 <CommentBubble
                     text={annotation.metadata.text}
@@ -279,7 +490,12 @@ export function TaskDiffViewer({
                 />
             );
         },
-        [handleCommentSubmit, handleCommentCancel, onRemoveComment],
+        [
+            handleCommentSubmit,
+            handleCommentCancel,
+            onRemoveComment,
+            onReplyToGhComment,
+        ],
     );
 
     const isInteractive = !!onAddComment;
@@ -328,10 +544,15 @@ export function TaskDiffViewer({
                     </span>
                 )}
                 <div className="flex items-center gap-1 shrink-0">
-                    {comments.length > 0 && (
-                        <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 mr-2">
+                    {(comments.length > 0 || ghComments.length > 0) && (
+                        <span className="flex items-center gap-1 text-xs text-muted-foreground mr-2">
                             <MessageSquare className="h-3 w-3" />
-                            {comments.length}
+                            {comments.length + ghComments.length}
+                            {ghComments.length > 0 && (
+                                <span className="text-blue-500 text-[10px]">
+                                    ({ghComments.length} from PR)
+                                </span>
+                            )}
                         </span>
                     )}
                     <Button

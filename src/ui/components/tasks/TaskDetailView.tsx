@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
     ArrowUp,
     Play,
@@ -31,6 +32,7 @@ import {
 } from "@core/api/useEngine";
 import { useQueueStore } from "@core/store/queue-store";
 import { useGlobalSettings, useProjectOverrides } from "@core/api/useSettings";
+import { usePrComments } from "@core/api/usePrLifecycle";
 import { generateBranchName, effectiveBaseBranch } from "@core/utils/branch";
 import { useAppStore } from "@core/store/app-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -268,6 +270,7 @@ interface TaskDetailViewProps {
 export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     const { data: task, isLoading } = useTask(taskId);
     const { data: repositories } = useRepositories();
+    const queryClient = useQueryClient();
     const updateTask = useUpdateTask();
     const deleteTask = useDeleteTask();
     const startTask = useStartTask();
@@ -347,6 +350,63 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
         showDiff && hasBranch ? repoPath : undefined,
         showDiff && hasBranch ? baseBranch : undefined,
         showDiff && hasBranch ? task?.branchName : undefined,
+    );
+
+    // PR comments from GitHub
+    const { data: prComments } = usePrComments(
+        task?.prState ? taskId : undefined,
+    );
+
+    const ghCommentsForDiff = useMemo(
+        () =>
+            (prComments ?? []).map((c) => ({
+                id: c.id,
+                githubCommentId: c.githubCommentId,
+                reviewer: c.reviewer,
+                body: c.body,
+                path: c.path,
+                line: c.line,
+                side: c.side,
+                classification: c.classification,
+                ourReply: c.ourReply,
+                addressedInCommit: c.addressedInCommit,
+                createdAt: c.createdAt,
+            })),
+        [prComments],
+    );
+
+    const handleReplyToGhComment = useCallback(
+        async (commentId: number, body: string) => {
+            if (!task?.prUrl || !repoPath) return;
+            try {
+                const { replyToComment, parseOwnerRepo } =
+                    await import("@core/services/github");
+                const parsed = parseOwnerRepo(task.prUrl);
+                if (!parsed) return;
+                await replyToComment(
+                    repoPath,
+                    parsed.owner,
+                    parsed.repo,
+                    parsed.number,
+                    commentId,
+                    body,
+                );
+                // Update local DB
+                const { setCommentReply } =
+                    await import("@core/db/pr-lifecycle");
+                await setCommentReply(commentId, body);
+                // Invalidate to refresh
+                void queryClient.invalidateQueries({
+                    queryKey: ["pr-comments", taskId],
+                });
+            } catch (e) {
+                console.error(
+                    "[TaskDetailView] reply to GH comment failed:",
+                    e,
+                );
+            }
+        },
+        [task?.prUrl, repoPath, taskId, queryClient],
     );
 
     const isReadOnly = task?.state === "done" || task?.state === "dismissed";
@@ -894,12 +954,16 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                         diffText={diffText}
                                         singleFile={activeTab}
                                         comments={inlineComments}
+                                        ghComments={ghCommentsForDiff}
                                         onAddComment={
                                             task.state === "review"
                                                 ? handleAddComment
                                                 : undefined
                                         }
                                         onRemoveComment={handleRemoveComment}
+                                        onReplyToGhComment={
+                                            handleReplyToGhComment
+                                        }
                                     />
                                 </ErrorBoundary>
                             </div>
