@@ -25,7 +25,6 @@ import {
     listPrComments,
     getPrStatus,
     replyToComment,
-    postPrComment,
     requestReview,
 } from "@core/services/github";
 import { listRepositories } from "@core/db/repositories";
@@ -382,21 +381,8 @@ export async function processTaskPr(
                 }
             }
 
-            // Post summary comment on the PR if code was pushed
-            if (pushResult.success && result.commitSha) {
-                const codeChangeReplies = replies.filter(
-                    (r) => r.made_code_changes,
-                );
-                if (codeChangeReplies.length > 0) {
-                    await postPrComment(
-                        repoPath,
-                        owner,
-                        repo,
-                        prNumber,
-                        `Addressed ${codeChangeReplies.length} review comment(s) in commit ${result.commitSha.slice(0, 7)}.`,
-                    );
-                }
-            }
+            // Per-comment replies already explain what was done — no need
+            // for a separate summary comment on the PR thread.
 
             // Re-request review
             const reviewer = latestReview?.user.login;

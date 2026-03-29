@@ -2,7 +2,15 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { PatchDiff } from "@pierre/diffs/react";
 import type { DiffLineAnnotation, AnnotationSide } from "@pierre/diffs/react";
 import type { SelectedLineRange } from "@pierre/diffs";
-import { Columns2, Rows3, MessageSquare, X, Send, Reply } from "lucide-react";
+import {
+    Columns2,
+    Rows3,
+    MessageSquare,
+    X,
+    Send,
+    Reply,
+    CheckCircle,
+} from "lucide-react";
 import { Button } from "@ui/components/ui/button";
 
 // ── Types ───────────────────────────────────────────────────
@@ -154,21 +162,30 @@ function CommentBubble({
     );
 }
 
-// ── GitHub PR comment bubble ────────────────────────────────
+// ── GitHub PR comment thread ────────────────────────────────
+
+function ReviewerAvatar({ name }: { name: string }) {
+    const initial = name.charAt(0).toUpperCase();
+    return (
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground ring-1 ring-border">
+            {initial}
+        </div>
+    );
+}
 
 function GitHubCommentBubble({
     reviewer,
     text,
-    classification,
     ourReply,
     addressedInCommit,
+    classification,
     onReply,
 }: {
     reviewer: string;
     text: string;
-    classification?: string;
     ourReply?: string;
     addressedInCommit?: string;
+    classification?: string;
     onReply?: (body: string) => void;
 }) {
     const [showReply, setShowReply] = useState(false);
@@ -182,45 +199,61 @@ function GitHubCommentBubble({
     const isResolved = !!addressedInCommit || classification === "resolved";
 
     return (
-        <div
-            className={`flex flex-col gap-1.5 px-3 py-2 border rounded-lg max-w-md w-full ${
-                isResolved
-                    ? "bg-green-50/50 dark:bg-green-950/20 border-green-200/60 dark:border-green-800/40"
-                    : "bg-blue-50/80 dark:bg-blue-950/30 border-blue-200/60 dark:border-blue-800/40"
-            }`}
-        >
-            <div className="flex items-center gap-1.5">
-                <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400">
-                    @{reviewer}
-                </span>
+        <div className="w-full max-w-lg overflow-hidden rounded-lg border border-border bg-background shadow-sm">
+            {/* Header */}
+            <div
+                className={`flex items-center gap-2 px-3 py-1.5 text-xs ${
+                    isResolved
+                        ? "bg-green-50 dark:bg-green-950/30 border-b border-green-200/50 dark:border-green-800/30"
+                        : "bg-muted/50 border-b border-border"
+                }`}
+            >
+                <ReviewerAvatar name={reviewer} />
+                <span className="font-medium text-foreground">{reviewer}</span>
                 {isResolved && (
-                    <span className="text-[9px] text-green-600 dark:text-green-400">
-                        Addressed
+                    <span className="ml-auto flex items-center gap-1 text-[10px] font-medium text-green-600 dark:text-green-400">
+                        <CheckCircle className="h-3 w-3" />
+                        Resolved
                     </span>
                 )}
             </div>
-            <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">
-                {text}
-            </p>
+
+            {/* Comment body */}
+            <div className="px-3 py-2.5">
+                <p className="text-[13px] leading-relaxed text-foreground whitespace-pre-wrap">
+                    {text}
+                </p>
+            </div>
+
+            {/* Our reply */}
             {ourReply && (
-                <div className="mt-1 pl-2 border-l-2 border-blue-300 dark:border-blue-700">
-                    <p className="text-[11px] text-muted-foreground italic">
-                        {ourReply}
-                    </p>
+                <div className="border-t border-border bg-muted/30">
+                    <div className="flex items-start gap-2 px-3 py-2.5">
+                        <Reply className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/60" />
+                        <p className="text-[12px] leading-relaxed text-muted-foreground">
+                            {ourReply}
+                        </p>
+                    </div>
                 </div>
             )}
+
+            {/* Reply action */}
             {onReply && !ourReply && !showReply && (
-                <button
-                    type="button"
-                    onClick={() => setShowReply(true)}
-                    className="flex items-center gap-1 text-[10px] text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 self-start"
-                >
-                    <Reply className="h-3 w-3" />
-                    Reply
-                </button>
+                <div className="border-t border-border px-3 py-1.5">
+                    <button
+                        type="button"
+                        onClick={() => setShowReply(true)}
+                        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        <Reply className="h-3 w-3" />
+                        Reply
+                    </button>
+                </div>
             )}
+
+            {/* Reply form */}
             {showReply && (
-                <div className="flex flex-col gap-1 mt-1">
+                <div className="border-t border-border px-3 py-2.5 space-y-2">
                     <textarea
                         ref={replyRef}
                         value={replyText}
@@ -239,37 +272,48 @@ function GitHubCommentBubble({
                                 setReplyText("");
                             }
                         }}
-                        placeholder="Reply to this comment..."
-                        rows={2}
-                        className="w-full resize-none rounded border border-border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                        placeholder="Write a reply..."
+                        rows={3}
+                        className="w-full resize-none rounded-md border border-border bg-muted/30 px-3 py-2 text-xs leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring"
                     />
-                    <div className="flex gap-1 justify-end">
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-5 text-[10px] px-1.5"
-                            onClick={() => {
-                                setShowReply(false);
-                                setReplyText("");
-                            }}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            size="sm"
-                            className="h-5 text-[10px] px-1.5 gap-1"
-                            onClick={() => {
-                                if (replyText.trim() && onReply) {
-                                    onReply(replyText.trim());
+                    <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-muted-foreground/40">
+                            <kbd className="rounded border border-border/40 bg-muted/50 px-1 font-mono">
+                                {navigator.platform.includes("Mac")
+                                    ? "⌘"
+                                    : "Ctrl"}
+                                +↵
+                            </kbd>{" "}
+                            to submit
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs px-2"
+                                onClick={() => {
                                     setShowReply(false);
                                     setReplyText("");
-                                }
-                            }}
-                            disabled={!replyText.trim()}
-                        >
-                            <Send className="h-2.5 w-2.5" />
-                            Reply
-                        </Button>
+                                }}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                size="sm"
+                                className="h-7 text-xs px-3 gap-1.5"
+                                onClick={() => {
+                                    if (replyText.trim() && onReply) {
+                                        onReply(replyText.trim());
+                                        setShowReply(false);
+                                        setReplyText("");
+                                    }
+                                }}
+                                disabled={!replyText.trim()}
+                            >
+                                <Send className="h-3 w-3" />
+                                Reply
+                            </Button>
+                        </div>
                     </div>
                 </div>
             )}
