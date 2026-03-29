@@ -15,8 +15,9 @@ fn token_entry() -> Result<Entry, String> {
 }
 
 /// Migrate an existing GitHub access token from the SQLite `auth` table
-/// into the OS credential store. Must run **before** migration 13 drops
-/// the `github_access_token` column.
+/// into the OS credential store. Must run **before** the SQL migration that
+/// runs `ALTER TABLE auth DROP COLUMN github_access_token` (migration 13 in
+/// `migrations.rs`), otherwise the token is lost.
 ///
 /// This is intentionally lenient: if the DB doesn't exist, the column is
 /// already gone, or the table is empty, it simply returns Ok(()).
