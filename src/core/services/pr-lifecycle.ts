@@ -18,14 +18,12 @@ import {
     listComments,
     updateCommentClassification,
     markCommentAddressed,
-    setCommentReply,
 } from "@core/db/pr-lifecycle";
 import {
     parseOwnerRepo,
     listPrReviews,
     listPrComments,
     getPrStatus,
-    replyToComment,
     postPrComment,
     requestReview,
 } from "@core/services/github";
@@ -189,48 +187,89 @@ export async function processTaskPr(
                 new Date(a.submitted_at).getTime(),
         )[0];
 
+    // 4a. Always sync comments regardless of review state
+    console.log(`[pr-lifecycle] fetching comments for PR #${prNumber}`);
+    let ghComments: GhPrComment[];
+    try {
+        ghComments = await listPrComments(repoPath, owner, repo, prNumber);
+    } catch (e) {
+        console.error(`[pr-lifecycle] failed to fetch comments:`, e);
+        ghComments = [];
+    }
+
+    // Get existing DB comments so we can identify our own replies
+    const existingDbComments = await listComments(task.id);
+    const ourReplyBodies = new Set(
+        existingDbComments
+            .filter((c) => c.ourReply)
+            .map((c) => c.ourReply!.trim()),
+    );
+
+    // Filter out comments that are our own replies (posted from SUSTN)
+    const externalComments = ghComments.filter((c) => {
+        // Skip replies where the body matches something we posted
+        if (c.in_reply_to_id && ourReplyBodies.has(c.body.trim())) {
+            console.log(
+                `[pr-lifecycle] skipping our own reply (comment ${c.id})`,
+            );
+            return false;
+        }
+        return true;
+    });
+
+    console.log(
+        `[pr-lifecycle] PR #${prNumber} — ${ghComments.length} total comment(s), ${externalComments.length} external`,
+    );
+
+    // Sync external comments to DB
+    for (const comment of externalComments) {
+        await upsertComment(task.id, {
+            githubCommentId: comment.id,
+            inReplyToId: comment.in_reply_to_id ?? undefined,
+            reviewer: comment.user.login,
+            body: comment.body,
+            path: comment.path ?? undefined,
+            line: comment.line ?? comment.original_line ?? undefined,
+            side: comment.side ?? undefined,
+            commitId: comment.commit_id ?? undefined,
+        });
+    }
+
+    // 4b. Classify any new top-level external comments that haven't been classified
+    const refreshedDbComments = await listComments(task.id);
+    const unclassified = externalComments.filter((c) => {
+        if (c.in_reply_to_id != null) return false; // Skip replies
+        const dbEntry = refreshedDbComments.find(
+            (d) => d.githubCommentId === c.id,
+        );
+        return dbEntry && !dbEntry.classification;
+    });
+
+    if (unclassified.length > 0) {
+        console.log(
+            `[pr-lifecycle] classifying ${unclassified.length} new comment(s)`,
+        );
+        const classifications = classifyCommentsHeuristic(unclassified);
+        for (const cls of classifications) {
+            await updateCommentClassification(
+                cls.commentId,
+                cls.classification,
+            );
+        }
+    }
+
+    // 5. Determine latest review state
     if (!latestReview) {
         console.log(
-            `[pr-lifecycle] PR #${prNumber} — no actionable reviews (only COMMENTED), staying in current state`,
+            `[pr-lifecycle] PR #${prNumber} — no actionable reviews (only COMMENTED)`,
         );
-        // No actionable reviews yet — stay in current state
         if (task.prState === "opened") {
             await updateTask(task.id, { prState: "in_review" as PrState });
-        }
-
-        // Still sync comments even without a formal review
-        try {
-            const comments = await listPrComments(
-                repoPath,
-                owner,
-                repo,
-                prNumber,
-            );
-            console.log(
-                `[pr-lifecycle] PR #${prNumber} — syncing ${comments.length} comment(s) (no review)`,
-            );
-            for (const comment of comments) {
-                await upsertComment(task.id, {
-                    githubCommentId: comment.id,
-                    inReplyToId: comment.in_reply_to_id ?? undefined,
-                    reviewer: comment.user.login,
-                    body: comment.body,
-                    path: comment.path ?? undefined,
-                    line: comment.line ?? comment.original_line ?? undefined,
-                    side: comment.side ?? undefined,
-                    commitId: comment.commit_id ?? undefined,
-                });
-            }
-        } catch (e) {
-            console.error(
-                `[pr-lifecycle] failed to sync comments (no review):`,
-                e,
-            );
         }
         return;
     }
 
-    // 5. Handle based on latest review
+    // 6. Handle approved
     if (latestReview.state === "APPROVED") {
         console.log(
             `[pr-lifecycle] PR #${prNumber} approved by @${latestReview.user.login}`,
@@ -248,18 +287,17 @@ export async function processTaskPr(
         return;
     }
 
+    // 7. Handle changes requested
     if (latestReview.state === "CHANGES_REQUESTED") {
         // Check if we're already addressing or if this is old
         if (
             task.prState === "addressing" ||
             task.prState === "re_review_requested"
         ) {
-            // Already addressing or waiting — check if this is a NEW review
-            const existingInDb = await listComments(task.id);
             const latestDbReviewTime =
-                existingInDb.length > 0
+                refreshedDbComments.length > 0
                     ? Math.max(
-                          ...existingInDb.map((c) =>
+                          ...refreshedDbComments.map((c) =>
                               new Date(c.createdAt).getTime(),
                           ),
                       )
@@ -271,7 +309,7 @@ export async function processTaskPr(
         // Check cycle limit
         if (task.prReviewCycles >= maxReviewCycles) {
             console.log(
-                `[pr-lifecycle] PR #${prNumber} — max review cycles (${maxReviewCycles}) reached, flagging for human attention`,
+                `[pr-lifecycle] PR #${prNumber} — max review cycles (${maxReviewCycles}) reached`,
             );
             await updateTask(task.id, {
                 prState: "needs_human_attention" as PrState,
@@ -280,7 +318,7 @@ export async function processTaskPr(
             await recordPrEvent(
                 task.id,
                 "pr_needs_human",
-                `Max review cycles (${maxReviewCycles}) reached — flagged for human attention`,
+                `Max review cycles (${maxReviewCycles}) reached`,
             );
             return;
         }
@@ -299,86 +337,42 @@ export async function processTaskPr(
             `@${latestReview.user.login} requested changes (cycle ${task.prReviewCycles + 1})`,
         );
 
-        // 6. Fetch and sync review comments
-        let comments: GhPrComment[];
-        try {
-            comments = await listPrComments(repoPath, owner, repo, prNumber);
-        } catch (e) {
-            console.error(`[pr-lifecycle] failed to fetch comments:`, e);
-            return;
-        }
-
-        for (const comment of comments) {
-            await upsertComment(task.id, {
-                githubCommentId: comment.id,
-                inReplyToId: comment.in_reply_to_id ?? undefined,
-                reviewer: comment.user.login,
-                body: comment.body,
-                path: comment.path ?? undefined,
-                line: comment.line ?? comment.original_line ?? undefined,
-                side: comment.side ?? undefined,
-                commitId: comment.commit_id ?? undefined,
-            });
-        }
-
-        // 7. Classify comments
-        const newComments = comments.filter(
-            (c) => c.in_reply_to_id == null, // Only top-level comments, not replies
+        // 8. Handle conversational comments that need replies
+        const conversationalToReply = refreshedDbComments.filter(
+            (c) =>
+                c.classification === "conversational" &&
+                !c.ourReply &&
+                !c.inReplyToId,
         );
-        const classifications = classifyCommentsHeuristic(newComments);
 
-        for (const cls of classifications) {
-            await updateCommentClassification(
-                cls.commentId,
-                cls.classification,
+        // Don't auto-reply for now — the heuristic classifier isn't reliable
+        // enough to draft replies. The user can reply from the diff viewer.
+        if (conversationalToReply.length > 0) {
+            console.log(
+                `[pr-lifecycle] ${conversationalToReply.length} conversational comment(s) — user can reply from diff viewer`,
             );
-        }
-
-        // 8. Handle conversational comments — reply
-        const conversational = classifications.filter(
-            (c) => c.classification === "conversational" && c.reply,
-        );
-        for (const conv of conversational) {
-            if (!conv.reply) continue;
-            try {
-                await replyToComment(
-                    repoPath,
-                    owner,
-                    repo,
-                    prNumber,
-                    conv.commentId,
-                    conv.reply,
-                );
-                await setCommentReply(conv.commentId, conv.reply);
-                console.log(
-                    `[pr-lifecycle] replied to comment ${conv.commentId}`,
-                );
-            } catch (e) {
-                console.error(
-                    `[pr-lifecycle] failed to reply to comment ${conv.commentId}:`,
-                    e,
-                );
-            }
         }
 
         // 9. Handle actionable comments — address via agent
-        const actionable = classifications.filter(
-            (c) => c.classification === "actionable",
+        const actionableComments = refreshedDbComments.filter(
+            (c) =>
+                c.classification === "actionable" &&
+                !c.addressedInCommit &&
+                !c.inReplyToId,
         );
 
-        if (actionable.length > 0) {
-            await updateTask(task.id, { prState: "addressing" as PrState });
-
-            const actionableComments = comments.filter((c) =>
-                actionable.some((a) => a.commentId === c.id),
+        if (actionableComments.length > 0) {
+            console.log(
+                `[pr-lifecycle] ${actionableComments.length} actionable comment(s) — spinning up agent`,
             );
+            await updateTask(task.id, { prState: "addressing" as PrState });
 
             const reviewContext = actionableComments
                 .map((c) => {
                     const location = c.path
                         ? `File: ${c.path}${c.line ? `:${c.line}` : ""}`
                         : "General";
-                    return `[${location}] @${c.user.login}: ${c.body}`;
+                    return `[${location}] @${c.reviewer}: ${c.body}`;
                 })
                 .join("\n\n");
 
@@ -397,7 +391,6 @@ export async function processTaskPr(
                 );
 
                 if (result.success) {
-                    // Push the changes
                     const pushResult = await invoke<{
                         success: boolean;
                         error?: string;
@@ -407,15 +400,13 @@ export async function processTaskPr(
                     });
 
                     if (pushResult.success) {
-                        // Mark comments as addressed
-                        for (const a of actionable) {
+                        for (const c of actionableComments) {
                             await markCommentAddressed(
-                                a.commentId,
+                                c.githubCommentId,
                                 result.commitSha ?? "",
                             );
                         }
 
-                        // Post a summary comment on the PR
                         const summary =
                             result.summary ?? "Addressed review comments";
                         await postPrComment(
@@ -426,7 +417,6 @@ export async function processTaskPr(
                             `I've addressed the review feedback:\n\n${summary}\n\nCommit: ${result.commitSha ?? "latest"}`,
                         );
 
-                        // Re-request review from the reviewer
                         try {
                             await requestReview(
                                 repoPath,
@@ -437,7 +427,7 @@ export async function processTaskPr(
                             );
                         } catch (e) {
                             console.warn(
-                                `[pr-lifecycle] re-request review failed (may not have permission):`,
+                                `[pr-lifecycle] re-request review failed:`,
                                 e,
                             );
                         }
@@ -449,7 +439,7 @@ export async function processTaskPr(
                         await recordPrEvent(
                             task.id,
                             "pr_comment_addressed",
-                            `Agent pushed commit ${result.commitSha?.slice(0, 7) ?? "?"} addressing ${actionable.length} comment(s)`,
+                            `Agent pushed commit ${result.commitSha?.slice(0, 7) ?? "?"} addressing ${actionableComments.length} comment(s)`,
                         );
                     } else {
                         console.error(
@@ -479,7 +469,9 @@ export async function processTaskPr(
                 });
             }
         } else {
-            // No actionable comments — just conversational, move back to waiting
+            console.log(
+                `[pr-lifecycle] no unaddressed actionable comments — waiting`,
+            );
             await updateTask(task.id, {
                 prState: "re_review_requested" as PrState,
             });
