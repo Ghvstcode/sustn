@@ -199,16 +199,16 @@ function GitHubCommentBubble({
     const isResolved = !!addressedInCommit || classification === "resolved";
 
     return (
-        <div className="my-1 w-full max-w-xl">
+        <div className="my-1.5 w-full">
             {/* Review comment */}
-            <div className="flex gap-2.5">
-                <div className="flex flex-col items-center">
+            <div className="flex gap-2">
+                <div className="flex flex-col items-center pt-0.5">
                     <ReviewerAvatar name={reviewer} />
                     {ourReply && <div className="mt-1 w-px flex-1 bg-border" />}
                 </div>
                 <div className="flex-1 min-w-0">
                     <div
-                        className={`rounded-lg border overflow-hidden ${
+                        className={`rounded-md border overflow-hidden ${
                             isResolved
                                 ? "border-green-300/50 dark:border-green-700/50"
                                 : "border-border"
@@ -332,26 +332,26 @@ function GitHubCommentBubble({
                 </div>
             </div>
 
-            {/* Threaded reply (connected via timeline line) */}
+            {/* Threaded reply */}
             {ourReply && (
-                <div className="flex gap-2.5 mt-0">
-                    <div className="flex w-7 justify-center">
+                <div className="flex gap-2">
+                    <div className="flex w-7 justify-center shrink-0">
                         <div className="w-px bg-border" />
                     </div>
-                    <div className="flex-1 min-w-0 pt-2 pb-1">
-                        <div className="rounded-lg border border-border overflow-hidden">
-                            <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/40">
-                                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 text-[9px] font-bold text-white">
+                    <div className="flex-1 min-w-0 pt-1.5">
+                        <div className="rounded-md border border-border overflow-hidden">
+                            <div className="flex items-center gap-1.5 px-3 py-1 bg-muted/40">
+                                <div className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 text-[8px] font-bold text-white">
                                     S
                                 </div>
-                                <span className="text-xs font-semibold text-foreground">
+                                <span className="text-[11px] font-medium text-foreground">
                                     You
                                 </span>
-                                <span className="text-[10px] text-muted-foreground">
+                                <span className="text-[10px] text-muted-foreground/60">
                                     via SUSTN
                                 </span>
                             </div>
-                            <div className="px-3 py-3 bg-background">
+                            <div className="px-3 py-2.5 bg-background">
                                 <p className="text-[13px] leading-[1.6] text-foreground whitespace-pre-wrap break-words">
                                     {ourReply}
                                 </p>
