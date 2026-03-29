@@ -563,15 +563,11 @@ export function TaskDiffViewer({
                     </span>
                 )}
                 <div className="flex items-center gap-1 shrink-0">
-                    {(comments.length > 0 || ghComments.length > 0) && (
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground mr-2">
+                    {ghComments.length > 0 && (
+                        <span className="flex items-center gap-1.5 text-xs text-muted-foreground mr-2">
                             <MessageSquare className="h-3 w-3" />
-                            {comments.length + ghComments.length}
-                            {ghComments.length > 0 && (
-                                <span className="text-blue-500 text-[10px]">
-                                    ({ghComments.length} from PR)
-                                </span>
-                            )}
+                            {ghComments.length} GitHub{" "}
+                            {ghComments.length === 1 ? "comment" : "comments"}
                         </span>
                     )}
                     <Button
