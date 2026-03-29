@@ -708,30 +708,36 @@ A human reviewer has left comments on the PR you created. You need to handle EVE
 {pr_description}
 
 ## Review Comments
+Each comment below has a COMMENT_ID number that you MUST include in your response.
+
 {review_comments}
 {prefs_section}
 
 ## Instructions
-For EACH review comment above, decide:
+For EACH review comment above:
 
-1. **If it requires code changes** (bug fix, refactor, improvement, the reviewer is questioning an approach and they're right): make the changes and commit. Include this trailer: SUSTN-Task: {task_id}
+1. **If it requires code changes** (bug fix, refactor, improvement, the reviewer is questioning an approach and they're right): make the changes, commit with trailer SUSTN-Task: {task_id}, and draft a reply explaining what you changed.
 
-2. **If it's a question about your reasoning** (why did you do X?): you have the context from when you wrote this code — explain your reasoning clearly.
+2. **If it's a question about your reasoning** (why did you do X?): explain your reasoning clearly — you have context from when you wrote this code.
 
 3. **If it's praise or acknowledgment** (looks good, nice, etc.): draft a brief thanks.
+
+CRITICAL: You MUST return a reply for EVERY comment. Use the exact COMMENT_ID number from each comment header above.
 
 After making any code changes and committing, output ONLY this JSON (no markdown):
 {{
   "replies": [
     {{
-      "comment_id": <github_comment_id>,
-      "reply": "Your response to this comment",
-      "made_code_changes": true/false
+      "comment_id": 1234567890,
+      "reply": "Your response to this specific comment",
+      "made_code_changes": true
     }}
   ],
   "summary": "Brief description of what was changed",
   "files_modified": ["list", "of", "files"]
-}}"#
+}}
+
+The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in each comment above. Do NOT use null."#
     );
 
     let result = worker::execute_task(

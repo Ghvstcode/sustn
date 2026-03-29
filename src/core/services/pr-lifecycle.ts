@@ -271,7 +271,7 @@ export async function processTaskPr(
             const location = c.path
                 ? `File: ${c.path}${c.line ? `:${c.line}` : ""}`
                 : "General";
-            return `[Comment ID: ${c.githubCommentId}] [${location}] @${c.reviewer}:\n${c.body}`;
+            return `[COMMENT_ID: ${c.githubCommentId}] [${location}] @${c.reviewer}:\n${c.body}`;
         })
         .join("\n\n---\n\n");
 
@@ -315,13 +315,29 @@ export async function processTaskPr(
                 );
             }
 
+            // Fix null comment_ids — if counts match, zip them
+            for (let i = 0; i < replies.length; i++) {
+                if (!replies[i].comment_id && i < unprocessedComments.length) {
+                    replies[i].comment_id =
+                        unprocessedComments[i].githubCommentId;
+                    console.log(
+                        `[pr-lifecycle] fixed null comment_id → ${replies[i].comment_id} (positional match)`,
+                    );
+                }
+            }
+
             console.log(
                 `[pr-lifecycle] Claude returned ${replies.length} reply(ies), push=${pushResult.success}`,
+                replies.map((r) => ({
+                    id: r.comment_id,
+                    code: r.made_code_changes,
+                    reply: r.reply?.slice(0, 60),
+                })),
             );
 
             // Post replies to GitHub and update DB
             for (const r of replies) {
-                if (!r.reply) continue;
+                if (!r.reply || !r.comment_id) continue;
                 try {
                     await replyToComment(
                         repoPath,
