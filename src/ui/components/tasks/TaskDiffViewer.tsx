@@ -167,7 +167,7 @@ function CommentBubble({
 function ReviewerAvatar({ name }: { name: string }) {
     const initial = name.charAt(0).toUpperCase();
     return (
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground ring-1 ring-border">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-400 to-blue-600 text-[11px] font-bold text-white shadow-sm">
             {initial}
         </div>
     );
@@ -199,120 +199,163 @@ function GitHubCommentBubble({
     const isResolved = !!addressedInCommit || classification === "resolved";
 
     return (
-        <div className="w-full max-w-lg overflow-hidden rounded-lg border border-border bg-background shadow-sm">
-            {/* Header */}
-            <div
-                className={`flex items-center gap-2 px-3 py-1.5 text-xs ${
-                    isResolved
-                        ? "bg-green-50 dark:bg-green-950/30 border-b border-green-200/50 dark:border-green-800/30"
-                        : "bg-muted/50 border-b border-border"
-                }`}
-            >
-                <ReviewerAvatar name={reviewer} />
-                <span className="font-medium text-foreground">{reviewer}</span>
-                {isResolved && (
-                    <span className="ml-auto flex items-center gap-1 text-[10px] font-medium text-green-600 dark:text-green-400">
-                        <CheckCircle className="h-3 w-3" />
-                        Resolved
-                    </span>
-                )}
-            </div>
+        <div className="my-1 w-full max-w-xl">
+            {/* Review comment */}
+            <div className="flex gap-2.5">
+                <div className="flex flex-col items-center">
+                    <ReviewerAvatar name={reviewer} />
+                    {ourReply && <div className="mt-1 w-px flex-1 bg-border" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <div
+                        className={`rounded-lg border overflow-hidden ${
+                            isResolved
+                                ? "border-green-300/50 dark:border-green-700/50"
+                                : "border-border"
+                        }`}
+                    >
+                        {/* Comment header */}
+                        <div
+                            className={`flex items-center gap-2 px-3 py-1.5 ${
+                                isResolved
+                                    ? "bg-green-50/80 dark:bg-green-950/40"
+                                    : "bg-muted/60"
+                            }`}
+                        >
+                            <span className="text-xs font-semibold text-foreground">
+                                {reviewer}
+                            </span>
+                            {isResolved && (
+                                <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/50 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300">
+                                    <CheckCircle className="h-3 w-3" />
+                                    Resolved
+                                </span>
+                            )}
+                        </div>
 
-            {/* Comment body */}
-            <div className="px-3 py-2.5">
-                <p className="text-[13px] leading-relaxed text-foreground whitespace-pre-wrap">
-                    {text}
-                </p>
-            </div>
+                        {/* Comment body */}
+                        <div className="px-3 py-3 bg-background">
+                            <p className="text-[13px] leading-[1.6] text-foreground whitespace-pre-wrap break-words">
+                                {text}
+                            </p>
+                        </div>
 
-            {/* Our reply */}
-            {ourReply && (
-                <div className="border-t border-border bg-muted/30">
-                    <div className="flex items-start gap-2 px-3 py-2.5">
-                        <Reply className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/60" />
-                        <p className="text-[12px] leading-relaxed text-muted-foreground">
-                            {ourReply}
-                        </p>
+                        {/* Reply action bar */}
+                        {onReply && !ourReply && !showReply && (
+                            <div className="flex items-center border-t border-border bg-muted/30 px-3 py-1.5">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowReply(true)}
+                                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                                >
+                                    <Reply className="h-3.5 w-3.5" />
+                                    Reply
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Reply form */}
+                        {showReply && (
+                            <div className="border-t border-border bg-muted/20 px-3 py-3 space-y-2.5">
+                                <textarea
+                                    ref={replyRef}
+                                    value={replyText}
+                                    onChange={(e) =>
+                                        setReplyText(e.target.value)
+                                    }
+                                    onKeyDown={(e) => {
+                                        if (
+                                            e.key === "Enter" &&
+                                            (e.metaKey || e.ctrlKey)
+                                        ) {
+                                            e.preventDefault();
+                                            if (replyText.trim() && onReply) {
+                                                onReply(replyText.trim());
+                                                setShowReply(false);
+                                                setReplyText("");
+                                            }
+                                        }
+                                        if (e.key === "Escape") {
+                                            setShowReply(false);
+                                            setReplyText("");
+                                        }
+                                    }}
+                                    placeholder="Write a reply..."
+                                    rows={3}
+                                    className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-[13px] leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring/50 focus:border-ring"
+                                />
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-muted-foreground/50">
+                                        <kbd className="rounded border border-border/50 bg-muted/60 px-1 py-0.5 font-mono text-[9px]">
+                                            {navigator.platform.includes("Mac")
+                                                ? "⌘"
+                                                : "Ctrl"}
+                                            +↵
+                                        </kbd>{" "}
+                                        to submit
+                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-7 text-xs px-2.5"
+                                            onClick={() => {
+                                                setShowReply(false);
+                                                setReplyText("");
+                                            }}
+                                        >
+                                            Cancel
+                                        </Button>
+                                        <Button
+                                            size="sm"
+                                            className="h-7 text-xs px-3 gap-1.5"
+                                            onClick={() => {
+                                                if (
+                                                    replyText.trim() &&
+                                                    onReply
+                                                ) {
+                                                    onReply(replyText.trim());
+                                                    setShowReply(false);
+                                                    setReplyText("");
+                                                }
+                                            }}
+                                            disabled={!replyText.trim()}
+                                        >
+                                            <Send className="h-3 w-3" />
+                                            Reply
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
-            )}
+            </div>
 
-            {/* Reply action */}
-            {onReply && !ourReply && !showReply && (
-                <div className="border-t border-border px-3 py-1.5">
-                    <button
-                        type="button"
-                        onClick={() => setShowReply(true)}
-                        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                        <Reply className="h-3 w-3" />
-                        Reply
-                    </button>
-                </div>
-            )}
-
-            {/* Reply form */}
-            {showReply && (
-                <div className="border-t border-border px-3 py-2.5 space-y-2">
-                    <textarea
-                        ref={replyRef}
-                        value={replyText}
-                        onChange={(e) => setReplyText(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                e.preventDefault();
-                                if (replyText.trim() && onReply) {
-                                    onReply(replyText.trim());
-                                    setShowReply(false);
-                                    setReplyText("");
-                                }
-                            }
-                            if (e.key === "Escape") {
-                                setShowReply(false);
-                                setReplyText("");
-                            }
-                        }}
-                        placeholder="Write a reply..."
-                        rows={3}
-                        className="w-full resize-none rounded-md border border-border bg-muted/30 px-3 py-2 text-xs leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-ring"
-                    />
-                    <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-muted-foreground/40">
-                            <kbd className="rounded border border-border/40 bg-muted/50 px-1 font-mono">
-                                {navigator.platform.includes("Mac")
-                                    ? "⌘"
-                                    : "Ctrl"}
-                                +↵
-                            </kbd>{" "}
-                            to submit
-                        </span>
-                        <div className="flex items-center gap-1.5">
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 text-xs px-2"
-                                onClick={() => {
-                                    setShowReply(false);
-                                    setReplyText("");
-                                }}
-                            >
-                                Cancel
-                            </Button>
-                            <Button
-                                size="sm"
-                                className="h-7 text-xs px-3 gap-1.5"
-                                onClick={() => {
-                                    if (replyText.trim() && onReply) {
-                                        onReply(replyText.trim());
-                                        setShowReply(false);
-                                        setReplyText("");
-                                    }
-                                }}
-                                disabled={!replyText.trim()}
-                            >
-                                <Send className="h-3 w-3" />
-                                Reply
-                            </Button>
+            {/* Threaded reply (connected via timeline line) */}
+            {ourReply && (
+                <div className="flex gap-2.5 mt-0">
+                    <div className="flex w-7 justify-center">
+                        <div className="w-px bg-border" />
+                    </div>
+                    <div className="flex-1 min-w-0 pt-2 pb-1">
+                        <div className="rounded-lg border border-border overflow-hidden">
+                            <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/40">
+                                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 text-[9px] font-bold text-white">
+                                    S
+                                </div>
+                                <span className="text-xs font-semibold text-foreground">
+                                    You
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                    via SUSTN
+                                </span>
+                            </div>
+                            <div className="px-3 py-3 bg-background">
+                                <p className="text-[13px] leading-[1.6] text-foreground whitespace-pre-wrap break-words">
+                                    {ourReply}
+                                </p>
+                            </div>
                         </div>
                     </div>
                 </div>
