@@ -114,9 +114,17 @@ export async function processTaskPr(
     );
 
     // 1. Check PR status (merged? closed?)
+    console.log(
+        `[pr-lifecycle] fetching PR status: ${owner}/${repo}#${prNumber}`,
+    );
     let prStatus;
     try {
         prStatus = await getPrStatus(repoPath, owner, repo, prNumber);
+        console.log(`[pr-lifecycle] PR status:`, {
+            state: prStatus.state,
+            merged: prStatus.merged,
+            reviewDecision: prStatus.reviewDecision,
+        });
     } catch (e) {
         console.error(`[pr-lifecycle] failed to get PR status:`, e);
         return;
@@ -144,9 +152,18 @@ export async function processTaskPr(
     }
 
     // 2. Fetch reviews
+    console.log(`[pr-lifecycle] fetching reviews for PR #${prNumber}`);
     let reviews: GhPrReview[];
     try {
         reviews = await listPrReviews(repoPath, owner, repo, prNumber);
+        console.log(
+            `[pr-lifecycle] found ${reviews.length} review(s):`,
+            reviews.map((r) => ({
+                reviewer: r.user.login,
+                state: r.state,
+                submitted: r.submitted_at,
+            })),
+        );
     } catch (e) {
         console.error(`[pr-lifecycle] failed to fetch reviews:`, e);
         return;
@@ -173,9 +190,42 @@ export async function processTaskPr(
         )[0];
 
     if (!latestReview) {
+        console.log(
+            `[pr-lifecycle] PR #${prNumber} — no actionable reviews (only COMMENTED), staying in current state`,
+        );
         // No actionable reviews yet — stay in current state
         if (task.prState === "opened") {
             await updateTask(task.id, { prState: "in_review" as PrState });
+        }
+
+        // Still sync comments even without a formal review
+        try {
+            const comments = await listPrComments(
+                repoPath,
+                owner,
+                repo,
+                prNumber,
+            );
+            console.log(
+                `[pr-lifecycle] PR #${prNumber} — syncing ${comments.length} comment(s) (no review)`,
+            );
+            for (const comment of comments) {
+                await upsertComment(task.id, {
+                    githubCommentId: comment.id,
+                    inReplyToId: comment.in_reply_to_id ?? undefined,
+                    reviewer: comment.user.login,
+                    body: comment.body,
+                    path: comment.path ?? undefined,
+                    line: comment.line ?? comment.original_line ?? undefined,
+                    side: comment.side ?? undefined,
+                    commitId: comment.commit_id ?? undefined,
+                });
+            }
+        } catch (e) {
+            console.error(
+                `[pr-lifecycle] failed to sync comments (no review):`,
+                e,
+            );
         }
         return;
     }
@@ -460,9 +510,25 @@ async function recordPrEvent(
  */
 export async function prLifecycleTick(): Promise<void> {
     const settings = await getGlobalSettings();
-    if (!settings.prLifecycleEnabled) return;
+    if (!settings.prLifecycleEnabled) {
+        console.log("[pr-lifecycle] tick — disabled in settings, skipping");
+        return;
+    }
+
+    console.log("[pr-lifecycle] tick — checking for active PRs...");
+
+    // First, backfill any tasks that have a pr_url but no pr_state/pr_number
+    await backfillPrState();
 
     const activePrs = await getTasksWithActivePr();
+    console.log(
+        `[pr-lifecycle] tick — found ${activePrs.length} active PR(s)`,
+        activePrs.map((p) => ({
+            id: p.id.slice(0, 8),
+            prState: p.prState,
+            prNumber: p.prNumber,
+        })),
+    );
     if (activePrs.length === 0) return;
 
     const repos = await listRepositories();
@@ -471,15 +537,68 @@ export async function prLifecycleTick(): Promise<void> {
 
     for (const pr of activePrs) {
         const repo = repoMap.get(pr.repositoryId);
-        if (!repo) continue;
+        if (!repo) {
+            console.log(
+                `[pr-lifecycle] skipping PR ${pr.prNumber} — repo ${pr.repositoryId} not found`,
+            );
+            continue;
+        }
 
         const task = await getTask(pr.id);
-        if (!task) continue;
+        if (!task) {
+            console.log(
+                `[pr-lifecycle] skipping PR ${pr.prNumber} — task ${pr.id} not found`,
+            );
+            continue;
+        }
+
+        console.log(
+            `[pr-lifecycle] processing PR #${pr.prNumber} (${task.title}) — prState=${task.prState}, repo=${repo.name}`,
+        );
 
         try {
             await processTaskPr(task, repo.path, maxCycles);
         } catch (e) {
             console.error(`[pr-lifecycle] error processing ${pr.prUrl}:`, e);
         }
+    }
+
+    console.log("[pr-lifecycle] tick — done");
+}
+
+/**
+ * Backfill pr_state and pr_number for tasks that have a pr_url
+ * but were created before the lifecycle feature was wired in.
+ */
+async function backfillPrState(): Promise<void> {
+    try {
+        const { default: Database } = await import("@tauri-apps/plugin-sql");
+        const { config } = await import("@core/config");
+        const db = await Database.load(config.dbUrl);
+        const rows = await db.select<{ id: string; pr_url: string }[]>(
+            `SELECT id, pr_url FROM tasks
+             WHERE pr_url IS NOT NULL
+               AND pr_url != ''
+               AND pr_state IS NULL`,
+        );
+        if (rows.length === 0) return;
+
+        console.log(
+            `[pr-lifecycle] backfilling ${rows.length} task(s) with pr_url but no pr_state`,
+        );
+
+        for (const row of rows) {
+            const parsed = parseOwnerRepo(row.pr_url);
+            if (!parsed) continue;
+            await updateTask(row.id, {
+                prState: "opened" as PrState,
+                prNumber: parsed.number,
+            });
+            console.log(
+                `[pr-lifecycle] backfilled task ${row.id.slice(0, 8)} — PR #${parsed.number}`,
+            );
+        }
+    } catch (e) {
+        console.error("[pr-lifecycle] backfill failed:", e);
     }
 }
