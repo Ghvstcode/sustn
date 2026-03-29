@@ -193,19 +193,6 @@ function GitHubCommentBubble({
                 <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400">
                     @{reviewer}
                 </span>
-                {classification && (
-                    <span
-                        className={`text-[9px] px-1 py-0.5 rounded ${
-                            classification === "actionable"
-                                ? "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300"
-                                : classification === "resolved"
-                                  ? "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300"
-                                  : "bg-muted text-muted-foreground"
-                        }`}
-                    >
-                        {classification}
-                    </span>
-                )}
                 {isResolved && (
                     <span className="text-[9px] text-green-600 dark:text-green-400">
                         Addressed

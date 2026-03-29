@@ -44,50 +44,56 @@ interface ClassificationResult {
 }
 
 /**
- * Heuristic-based classification fallback.
- * Works without a Claude call for simple cases.
+ * Classify PR comments as actionable or conversational.
+ *
+ * Default: actionable. A reviewer comments because they want something.
+ * Only mark as conversational if it's clearly praise, acknowledgment,
+ * or a simple "nit" the reviewer flagged as optional.
  */
 function classifyCommentsHeuristic(
     comments: GhPrComment[],
 ): ClassificationResult[] {
     return comments.map((c) => {
-        const body = c.body.toLowerCase();
-        const isActionable =
-            // Explicit change requests
-            /\b(please|should|could you|can you|need to|must|change|rename|refactor|fix|update|move|remove|delete|add|replace|use instead|consider using)\b/i.test(
-                c.body,
-            ) &&
-            // Not just a question
-            !(
-                /^(why|how|what|is this|does this|did you)\b/i.test(
-                    c.body.trim(),
-                ) && c.body.trim().endsWith("?")
-            ) &&
-            // Not praise
-            !/^(nice|great|good|looks good|lgtm|nit:|nit\b|optional:)/i.test(
-                c.body.trim(),
-            );
+        const body = c.body.trim();
 
-        const isNit =
-            /^nit[:\s]/i.test(c.body.trim()) || body.includes("optional");
+        // Clearly conversational — pure praise or acknowledgment
         const isPraise =
-            /\b(nice|great|good job|well done|looks good|lgtm|👍|🎉)\b/i.test(
+            /^(nice|great|good|looks good|lgtm|awesome|perfect|love it|well done|👍|🎉|💯|✅)\s*[.!]?$/i.test(
                 body,
             );
 
-        if (isPraise || isNit) {
+        // Explicitly optional nits
+        const isNit = /^nit[:\s]/i.test(body) || /^optional[:\s]/i.test(body);
+
+        // Very short generic acknowledgments
+        const isAck =
+            body.length < 20 &&
+            /^(thanks|thank you|ok|okay|got it|makes sense|agreed|fair enough|sure|yep|yes|no worries)\s*[.!]?$/i.test(
+                body,
+            );
+
+        if (isPraise || isAck) {
             return {
                 commentId: c.id,
                 classification: "conversational" as const,
-                reply: isPraise ? "Thanks!" : undefined,
+                reply: "Thanks!",
             };
         }
 
+        if (isNit) {
+            return {
+                commentId: c.id,
+                classification: "conversational" as const,
+                reply: "Good catch, noted!",
+            };
+        }
+
+        // Everything else is actionable — questions about the code,
+        // suggestions, concerns, "why did you...", "this doesn't...",
+        // "should we...", etc. all warrant the agent addressing them.
         return {
             commentId: c.id,
-            classification: isActionable
-                ? ("actionable" as const)
-                : ("conversational" as const),
+            classification: "actionable" as const,
         };
     });
 }
@@ -260,19 +266,43 @@ export async function processTaskPr(
         }
     }
 
-    // 5. Determine latest review state
-    if (!latestReview) {
+    // 5. Handle unaddressed comments — regardless of formal review state
+    //    Comments are actionable even without a CHANGES_REQUESTED review.
+    const hasUnaddressedActionable = refreshedDbComments.some(
+        (c) =>
+            c.classification === "actionable" &&
+            !c.addressedInCommit &&
+            !c.inReplyToId,
+    );
+    const hasUnrepliedConversational = refreshedDbComments.some(
+        (c) =>
+            c.classification === "conversational" &&
+            !c.ourReply &&
+            !c.inReplyToId,
+    );
+
+    if (task.prState === "opened") {
+        await updateTask(task.id, { prState: "in_review" as PrState });
+    }
+
+    // Process comments if there are any to handle, regardless of review state
+    if (
+        (hasUnaddressedActionable || hasUnrepliedConversational) &&
+        !latestReview
+    ) {
         console.log(
-            `[pr-lifecycle] PR #${prNumber} — no actionable reviews (only COMMENTED)`,
+            `[pr-lifecycle] PR #${prNumber} — no formal review but has comments to process (actionable=${hasUnaddressedActionable}, conversational=${hasUnrepliedConversational})`,
         );
-        if (task.prState === "opened") {
-            await updateTask(task.id, { prState: "in_review" as PrState });
-        }
+        // Fall through to the comment handling below
+    } else if (!latestReview) {
+        console.log(
+            `[pr-lifecycle] PR #${prNumber} — no reviews, no unprocessed comments`,
+        );
         return;
     }
 
     // 6. Handle approved
-    if (latestReview.state === "APPROVED") {
+    if (latestReview?.state === "APPROVED") {
         console.log(
             `[pr-lifecycle] PR #${prNumber} approved by @${latestReview.user.login}`,
         );
@@ -289,9 +319,8 @@ export async function processTaskPr(
         return;
     }
 
-    // 7. Handle changes requested
-    if (latestReview.state === "CHANGES_REQUESTED") {
-        // Check if we're already addressing or if this is old
+    // 7. Handle changes requested (formal review) — update state + cycle count
+    if (latestReview?.state === "CHANGES_REQUESTED") {
         if (
             task.prState === "addressing" ||
             task.prState === "re_review_requested"
@@ -305,10 +334,9 @@ export async function processTaskPr(
                       )
                     : 0;
             const reviewTime = new Date(latestReview.submitted_at).getTime();
-            if (reviewTime <= latestDbReviewTime) return; // Already processed
+            if (reviewTime <= latestDbReviewTime) return;
         }
 
-        // Check cycle limit
         if (task.prReviewCycles >= maxReviewCycles) {
             console.log(
                 `[pr-lifecycle] PR #${prNumber} — max review cycles (${maxReviewCycles}) reached`,
@@ -338,126 +366,126 @@ export async function processTaskPr(
             "pr_review_received",
             `@${latestReview.user.login} requested changes (cycle ${task.prReviewCycles + 1})`,
         );
+    }
 
-        // 8. Handle conversational comments — auto-reply
-        const conversationalToReply = refreshedDbComments.filter(
-            (c) =>
-                c.classification === "conversational" &&
-                !c.ourReply &&
-                !c.inReplyToId,
-        );
+    // 8. Handle conversational comments — auto-reply
+    const conversationalToReply = refreshedDbComments.filter(
+        (c) =>
+            c.classification === "conversational" &&
+            !c.ourReply &&
+            !c.inReplyToId,
+    );
 
-        for (const conv of conversationalToReply) {
-            // Use the heuristic's suggested reply, or a generic acknowledgment
-            const classResult = classifyCommentsHeuristic([
-                {
-                    id: conv.githubCommentId,
-                    user: { login: conv.reviewer },
-                    body: conv.body,
-                    path: conv.path ?? null,
-                    line: conv.line ?? null,
-                    side: conv.side ?? null,
-                    original_line: null,
-                    commit_id: null,
-                    in_reply_to_id: null,
-                    created_at: conv.createdAt,
-                    updated_at: conv.createdAt,
-                },
-            ]);
-            const reply = classResult[0]?.reply ?? "Thanks for the feedback!";
+    for (const conv of conversationalToReply) {
+        const classResult = classifyCommentsHeuristic([
+            {
+                id: conv.githubCommentId,
+                user: { login: conv.reviewer },
+                body: conv.body,
+                path: conv.path ?? null,
+                line: conv.line ?? null,
+                side: conv.side ?? null,
+                original_line: null,
+                commit_id: null,
+                in_reply_to_id: null,
+                created_at: conv.createdAt,
+                updated_at: conv.createdAt,
+            },
+        ]);
+        const reply = classResult[0]?.reply ?? "Thanks for the feedback!";
 
-            try {
-                await replyToComment(
-                    repoPath,
-                    owner,
-                    repo,
-                    prNumber,
-                    conv.githubCommentId,
-                    reply,
-                );
-                await setCommentReply(conv.githubCommentId, reply);
-                console.log(
-                    `[pr-lifecycle] replied to conversational comment ${conv.githubCommentId}: "${reply}"`,
-                );
-            } catch (e) {
-                console.error(
-                    `[pr-lifecycle] failed to reply to comment ${conv.githubCommentId}:`,
-                    e,
-                );
-            }
-        }
-
-        // 9. Handle actionable comments — address via agent
-        const actionableComments = refreshedDbComments.filter(
-            (c) =>
-                c.classification === "actionable" &&
-                !c.addressedInCommit &&
-                !c.inReplyToId,
-        );
-
-        if (actionableComments.length > 0) {
-            console.log(
-                `[pr-lifecycle] ${actionableComments.length} actionable comment(s) — spinning up agent`,
+        try {
+            await replyToComment(
+                repoPath,
+                owner,
+                repo,
+                prNumber,
+                conv.githubCommentId,
+                reply,
             );
-            await updateTask(task.id, { prState: "addressing" as PrState });
+            await setCommentReply(conv.githubCommentId, reply);
+            console.log(
+                `[pr-lifecycle] replied to conversational comment ${conv.githubCommentId}: "${reply}"`,
+            );
+        } catch (e) {
+            console.error(
+                `[pr-lifecycle] failed to reply to comment ${conv.githubCommentId}:`,
+                e,
+            );
+        }
+    }
 
-            const reviewContext = actionableComments
-                .map((c) => {
-                    const location = c.path
-                        ? `File: ${c.path}${c.line ? `:${c.line}` : ""}`
-                        : "General";
-                    return `[${location}] @${c.reviewer}: ${c.body}`;
-                })
-                .join("\n\n");
+    // 9. Handle actionable comments — address via agent
+    const actionableComments = refreshedDbComments.filter(
+        (c) =>
+            c.classification === "actionable" &&
+            !c.addressedInCommit &&
+            !c.inReplyToId,
+    );
 
-            try {
-                const result = await invoke<WorkResult>(
-                    "engine_address_review",
-                    {
-                        taskId: task.id,
-                        repositoryId: task.repositoryId,
-                        repoPath,
-                        branchName: task.branchName,
-                        baseBranch: task.baseBranch ?? "main",
-                        reviewComments: reviewContext,
-                        prDescription: task.description ?? task.title,
-                    },
-                );
+    if (actionableComments.length > 0) {
+        console.log(
+            `[pr-lifecycle] ${actionableComments.length} actionable comment(s) — spinning up agent`,
+        );
+        await updateTask(task.id, { prState: "addressing" as PrState });
 
-                if (result.success) {
-                    const pushResult = await invoke<{
-                        success: boolean;
-                        error?: string;
-                    }>("engine_push_branch", {
-                        repoPath,
-                        branchName: task.branchName,
-                    });
+        const reviewContext = actionableComments
+            .map((c) => {
+                const location = c.path
+                    ? `File: ${c.path}${c.line ? `:${c.line}` : ""}`
+                    : "General";
+                return `[${location}] @${c.reviewer}: ${c.body}`;
+            })
+            .join("\n\n");
 
-                    if (pushResult.success) {
-                        for (const c of actionableComments) {
-                            await markCommentAddressed(
-                                c.githubCommentId,
-                                result.commitSha ?? "",
-                            );
-                        }
+        try {
+            const result = await invoke<WorkResult>("engine_address_review", {
+                taskId: task.id,
+                repositoryId: task.repositoryId,
+                repoPath,
+                branchName: task.branchName,
+                baseBranch: task.baseBranch ?? "main",
+                reviewComments: reviewContext,
+                prDescription: task.description ?? task.title,
+            });
 
-                        const summary =
-                            result.summary ?? "Addressed review comments";
-                        await postPrComment(
-                            repoPath,
-                            owner,
-                            repo,
-                            prNumber,
-                            `I've addressed the review feedback:\n\n${summary}\n\nCommit: ${result.commitSha ?? "latest"}`,
+            if (result.success) {
+                const pushResult = await invoke<{
+                    success: boolean;
+                    error?: string;
+                }>("engine_push_branch", {
+                    repoPath,
+                    branchName: task.branchName,
+                });
+
+                if (pushResult.success) {
+                    for (const c of actionableComments) {
+                        await markCommentAddressed(
+                            c.githubCommentId,
+                            result.commitSha ?? "",
                         );
+                    }
 
+                    const summary =
+                        result.summary ?? "Addressed review comments";
+                    await postPrComment(
+                        repoPath,
+                        owner,
+                        repo,
+                        prNumber,
+                        `I've addressed the review feedback:\n\n${summary}\n\nCommit: ${result.commitSha ?? "latest"}`,
+                    );
+
+                    // Re-request review if we know who reviewed
+                    const reviewer = latestReview?.user.login;
+                    if (reviewer) {
                         try {
                             await requestReview(
                                 repoPath,
                                 owner,
                                 repo,
                                 prNumber,
-                                [latestReview.user.login],
+                                [reviewer],
                             );
                         } catch (e) {
                             console.warn(
@@ -465,49 +493,42 @@ export async function processTaskPr(
                                 e,
                             );
                         }
-
-                        await updateTask(task.id, {
-                            prState: "re_review_requested" as PrState,
-                            commitSha: result.commitSha,
-                        });
-                        await recordPrEvent(
-                            task.id,
-                            "pr_comment_addressed",
-                            `Agent pushed commit ${result.commitSha?.slice(0, 7) ?? "?"} addressing ${actionableComments.length} comment(s)`,
-                        );
-                    } else {
-                        console.error(
-                            `[pr-lifecycle] push failed:`,
-                            pushResult.error,
-                        );
-                        await updateTask(task.id, {
-                            prState: "changes_requested" as PrState,
-                            lastError: `Failed to push changes: ${pushResult.error}`,
-                        });
                     }
+
+                    await updateTask(task.id, {
+                        prState: "re_review_requested" as PrState,
+                        commitSha: result.commitSha,
+                    });
+                    await recordPrEvent(
+                        task.id,
+                        "pr_comment_addressed",
+                        `Agent pushed commit ${result.commitSha?.slice(0, 7) ?? "?"} addressing ${actionableComments.length} comment(s)`,
+                    );
                 } else {
                     console.error(
-                        `[pr-lifecycle] address review failed:`,
-                        result.error,
+                        `[pr-lifecycle] push failed:`,
+                        pushResult.error,
                     );
                     await updateTask(task.id, {
-                        prState: "changes_requested" as PrState,
-                        lastError: result.error ?? "Failed to address review",
+                        prState: "in_review" as PrState,
+                        lastError: `Failed to push changes: ${pushResult.error}`,
                     });
                 }
-            } catch (e) {
-                console.error(`[pr-lifecycle] address review error:`, e);
+            } else {
+                console.error(
+                    `[pr-lifecycle] address review failed:`,
+                    result.error,
+                );
                 await updateTask(task.id, {
-                    prState: "changes_requested" as PrState,
-                    lastError: e instanceof Error ? e.message : String(e),
+                    prState: "in_review" as PrState,
+                    lastError: result.error ?? "Failed to address review",
                 });
             }
-        } else {
-            console.log(
-                `[pr-lifecycle] no unaddressed actionable comments — waiting`,
-            );
+        } catch (e) {
+            console.error(`[pr-lifecycle] address review error:`, e);
             await updateTask(task.id, {
-                prState: "re_review_requested" as PrState,
+                prState: "in_review" as PrState,
+                lastError: e instanceof Error ? e.message : String(e),
             });
         }
     }
