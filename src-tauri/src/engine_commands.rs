@@ -618,6 +618,7 @@ pub struct GhApiResult {
 }
 
 /// Address PR review comments by invoking Claude CLI with the review context.
+/// Resumes the original session when available so Claude has full reasoning context.
 #[tauri::command]
 pub async fn engine_address_review(
     app: AppHandle,
@@ -629,10 +630,12 @@ pub async fn engine_address_review(
     base_branch: String,
     review_comments: String,
     pr_description: String,
+    resume_session_id: Option<String>,
 ) -> Result<worker::WorkResult, String> {
     println!(
-        "[engine_address_review] task_id={task_id}, branch={branch_name}, comments_len={}",
-        review_comments.len()
+        "[engine_address_review] task_id={task_id}, branch={branch_name}, comments_len={}, resume={:?}",
+        review_comments.len(),
+        resume_session_id,
     );
 
     // Wait for deep scan
@@ -699,26 +702,35 @@ pub async fn engine_address_review(
     let prompt = format!(
         r#"IMPORTANT: You are running as an automated background agent in non-interactive mode. Commit your changes directly — do NOT ask for permission.
 
-You are addressing PR review comments. A human reviewer has left feedback on a pull request that you previously created.
+A human reviewer has left comments on the PR you created. You need to handle EVERY comment — either by making code changes or by drafting a reply.
 
 ## PR Description
 {pr_description}
 
-## Review Comments to Address
+## Review Comments
 {review_comments}
 {prefs_section}
 
 ## Instructions
-1. Read and understand each review comment carefully
-2. For actionable comments (change requests, bug reports, improvements): make the requested changes
-3. Commit your changes with a clear commit message describing what was addressed
-4. Include this trailer in your commit message: SUSTN-Task: {task_id}
+For EACH review comment above, decide:
 
-When done, output ONLY this JSON (no markdown, no explanation):
+1. **If it requires code changes** (bug fix, refactor, improvement, the reviewer is questioning an approach and they're right): make the changes and commit. Include this trailer: SUSTN-Task: {task_id}
+
+2. **If it's a question about your reasoning** (why did you do X?): you have the context from when you wrote this code — explain your reasoning clearly.
+
+3. **If it's praise or acknowledgment** (looks good, nice, etc.): draft a brief thanks.
+
+After making any code changes and committing, output ONLY this JSON (no markdown):
 {{
-  "files_modified": ["list", "of", "files"],
-  "summary": "Brief description of what was changed to address the review",
-  "tests_added": true or false
+  "replies": [
+    {{
+      "comment_id": <github_comment_id>,
+      "reply": "Your response to this comment",
+      "made_code_changes": true/false
+    }}
+  ],
+  "summary": "Brief description of what was changed",
+  "files_modified": ["list", "of", "files"]
 }}"#
     );
 
@@ -732,7 +744,7 @@ When done, output ONLY this JSON (no markdown, no explanation):
         &base_branch,
         &branch_name,
         Some(review_comments),
-        None,
+        resume_session_id,
         agent_prefs.as_deref(),
     )
     .await;

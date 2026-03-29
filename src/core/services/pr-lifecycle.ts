@@ -4,9 +4,9 @@
  * Orchestrates the full lifecycle of PRs opened by SUSTN:
  *   opened → in_review → changes_requested → addressing → re_review_requested → approved → merged
  *
- * Polls GitHub for review events, classifies comments via Claude,
- * addresses actionable feedback, replies to conversational comments,
- * and re-requests review when done.
+ * When new review comments arrive, sends ALL of them to Claude in a single
+ * resumed session (preserving the original reasoning context). Claude handles
+ * classification, code changes, and reply drafting in one pass.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -16,7 +16,6 @@ import {
     upsertReview,
     upsertComment,
     listComments,
-    updateCommentClassification,
     markCommentAddressed,
     setCommentReply,
 } from "@core/db/pr-lifecycle";
@@ -35,67 +34,12 @@ import type { WorkResult } from "@core/types/agent";
 import type { PrState, Task } from "@core/types/task";
 import type { GhPrComment, GhPrReview } from "@core/services/github";
 
-// ── Classification ──────────────────────────────────────────
+// ── Claude Response Parsing ─────────────────────────────────
 
-interface ClassificationResult {
-    commentId: number;
-    classification: "actionable" | "conversational";
-    reply?: string; // For conversational comments
-}
-
-/**
- * Classify PR comments as actionable or conversational.
- *
- * Default: actionable. A reviewer comments because they want something.
- * Only mark as conversational if it's clearly praise, acknowledgment,
- * or a simple "nit" the reviewer flagged as optional.
- */
-function classifyCommentsHeuristic(
-    comments: GhPrComment[],
-): ClassificationResult[] {
-    return comments.map((c) => {
-        const body = c.body.trim();
-
-        // Clearly conversational — pure praise or acknowledgment
-        const isPraise =
-            /^(nice|great|good|looks good|lgtm|awesome|perfect|love it|well done|👍|🎉|💯|✅)\s*[.!]?$/i.test(
-                body,
-            );
-
-        // Explicitly optional nits
-        const isNit = /^nit[:\s]/i.test(body) || /^optional[:\s]/i.test(body);
-
-        // Very short generic acknowledgments
-        const isAck =
-            body.length < 20 &&
-            /^(thanks|thank you|ok|okay|got it|makes sense|agreed|fair enough|sure|yep|yes|no worries)\s*[.!]?$/i.test(
-                body,
-            );
-
-        if (isPraise || isAck) {
-            return {
-                commentId: c.id,
-                classification: "conversational" as const,
-                reply: "Thanks!",
-            };
-        }
-
-        if (isNit) {
-            return {
-                commentId: c.id,
-                classification: "conversational" as const,
-                reply: "Good catch, noted!",
-            };
-        }
-
-        // Everything else is actionable — questions about the code,
-        // suggestions, concerns, "why did you...", "this doesn't...",
-        // "should we...", etc. all warrant the agent addressing them.
-        return {
-            commentId: c.id,
-            classification: "actionable" as const,
-        };
-    });
+interface ClaudeReviewReply {
+    comment_id: number;
+    reply: string;
+    made_code_changes: boolean;
 }
 
 // ── Core Lifecycle ──────────────────────────────────────────
@@ -186,7 +130,6 @@ export async function processTaskPr(
         });
     }
 
-    // 4. Determine latest review state
     const latestReview = reviews
         .filter((r) => r.state !== "COMMENTED")
         .sort(
@@ -195,7 +138,7 @@ export async function processTaskPr(
                 new Date(a.submitted_at).getTime(),
         )[0];
 
-    // 4a. Always sync comments regardless of review state
+    // 4. Always sync comments regardless of review state
     console.log(`[pr-lifecycle] fetching comments for PR #${prNumber}`);
     let ghComments: GhPrComment[];
     try {
@@ -205,7 +148,7 @@ export async function processTaskPr(
         ghComments = [];
     }
 
-    // Get existing DB comments so we can identify our own replies
+    // Filter out our own replies
     const existingDbComments = await listComments(task.id);
     const ourReplyBodies = new Set(
         existingDbComments
@@ -213,9 +156,7 @@ export async function processTaskPr(
             .map((c) => c.ourReply!.trim()),
     );
 
-    // Filter out comments that are our own replies (posted from SUSTN)
     const externalComments = ghComments.filter((c) => {
-        // Skip replies where the body matches something we posted
         if (c.in_reply_to_id && ourReplyBodies.has(c.body.trim())) {
             console.log(
                 `[pr-lifecycle] skipping our own reply (comment ${c.id})`,
@@ -243,62 +184,14 @@ export async function processTaskPr(
         });
     }
 
-    // 4b. Classify any new top-level external comments that haven't been classified
+    // 5. Determine which comments need processing
     const refreshedDbComments = await listComments(task.id);
-    const unclassified = externalComments.filter((c) => {
-        if (c.in_reply_to_id != null) return false; // Skip replies
-        const dbEntry = refreshedDbComments.find(
-            (d) => d.githubCommentId === c.id,
-        );
-        return dbEntry && !dbEntry.classification;
-    });
-
-    if (unclassified.length > 0) {
-        console.log(
-            `[pr-lifecycle] classifying ${unclassified.length} new comment(s)`,
-        );
-        const classifications = classifyCommentsHeuristic(unclassified);
-        for (const cls of classifications) {
-            await updateCommentClassification(
-                cls.commentId,
-                cls.classification,
-            );
-        }
-    }
-
-    // 5. Handle unaddressed comments — regardless of formal review state
-    //    Comments are actionable even without a CHANGES_REQUESTED review.
-    const hasUnaddressedActionable = refreshedDbComments.some(
-        (c) =>
-            c.classification === "actionable" &&
-            !c.addressedInCommit &&
-            !c.inReplyToId,
-    );
-    const hasUnrepliedConversational = refreshedDbComments.some(
-        (c) =>
-            c.classification === "conversational" &&
-            !c.ourReply &&
-            !c.inReplyToId,
+    const unprocessedComments = refreshedDbComments.filter(
+        (c) => !c.ourReply && !c.addressedInCommit && !c.inReplyToId,
     );
 
     if (task.prState === "opened") {
         await updateTask(task.id, { prState: "in_review" as PrState });
-    }
-
-    // Process comments if there are any to handle, regardless of review state
-    if (
-        (hasUnaddressedActionable || hasUnrepliedConversational) &&
-        !latestReview
-    ) {
-        console.log(
-            `[pr-lifecycle] PR #${prNumber} — no formal review but has comments to process (actionable=${hasUnaddressedActionable}, conversational=${hasUnrepliedConversational})`,
-        );
-        // Fall through to the comment handling below
-    } else if (!latestReview) {
-        console.log(
-            `[pr-lifecycle] PR #${prNumber} — no reviews, no unprocessed comments`,
-        );
-        return;
     }
 
     // 6. Handle approved
@@ -319,13 +212,13 @@ export async function processTaskPr(
         return;
     }
 
-    // 7. Handle changes requested (formal review) — update state + cycle count
+    // 7. Handle changes requested — update cycle count
     if (latestReview?.state === "CHANGES_REQUESTED") {
         if (
             task.prState === "addressing" ||
             task.prState === "re_review_requested"
         ) {
-            const latestDbReviewTime =
+            const latestDbTime =
                 refreshedDbComments.length > 0
                     ? Math.max(
                           ...refreshedDbComments.map((c) =>
@@ -334,7 +227,7 @@ export async function processTaskPr(
                       )
                     : 0;
             const reviewTime = new Date(latestReview.submitted_at).getTime();
-            if (reviewTime <= latestDbReviewTime) return;
+            if (reviewTime <= latestDbTime) return;
         }
 
         if (task.prReviewCycles >= maxReviewCycles) {
@@ -343,19 +236,10 @@ export async function processTaskPr(
             );
             await updateTask(task.id, {
                 prState: "needs_human_attention" as PrState,
-                lastError: `Reviewer requested changes ${task.prReviewCycles} times — needs human review`,
+                lastError: `Reviewer requested changes ${task.prReviewCycles} times`,
             });
-            await recordPrEvent(
-                task.id,
-                "pr_needs_human",
-                `Max review cycles (${maxReviewCycles}) reached`,
-            );
             return;
         }
-
-        console.log(
-            `[pr-lifecycle] PR #${prNumber} — changes requested by @${latestReview.user.login} (cycle ${task.prReviewCycles + 1}/${maxReviewCycles})`,
-        );
 
         await updateTask(task.id, {
             prState: "changes_requested" as PrState,
@@ -368,169 +252,174 @@ export async function processTaskPr(
         );
     }
 
-    // 8. Handle conversational comments — auto-reply
-    const conversationalToReply = refreshedDbComments.filter(
-        (c) =>
-            c.classification === "conversational" &&
-            !c.ourReply &&
-            !c.inReplyToId,
-    );
-
-    for (const conv of conversationalToReply) {
-        const classResult = classifyCommentsHeuristic([
-            {
-                id: conv.githubCommentId,
-                user: { login: conv.reviewer },
-                body: conv.body,
-                path: conv.path ?? null,
-                line: conv.line ?? null,
-                side: conv.side ?? null,
-                original_line: null,
-                commit_id: null,
-                in_reply_to_id: null,
-                created_at: conv.createdAt,
-                updated_at: conv.createdAt,
-            },
-        ]);
-        const reply = classResult[0]?.reply ?? "Thanks for the feedback!";
-
-        try {
-            await replyToComment(
-                repoPath,
-                owner,
-                repo,
-                prNumber,
-                conv.githubCommentId,
-                reply,
-            );
-            await setCommentReply(conv.githubCommentId, reply);
-            console.log(
-                `[pr-lifecycle] replied to conversational comment ${conv.githubCommentId}: "${reply}"`,
-            );
-        } catch (e) {
-            console.error(
-                `[pr-lifecycle] failed to reply to comment ${conv.githubCommentId}:`,
-                e,
-            );
-        }
+    // 8. If no unprocessed comments, nothing for the agent to do
+    if (unprocessedComments.length === 0) {
+        console.log(`[pr-lifecycle] PR #${prNumber} — no unprocessed comments`);
+        return;
     }
 
-    // 9. Handle actionable comments — address via agent
-    const actionableComments = refreshedDbComments.filter(
-        (c) =>
-            c.classification === "actionable" &&
-            !c.addressedInCommit &&
-            !c.inReplyToId,
+    // 9. Send ALL unprocessed comments to Claude in one session.
+    //    Resume the original session so Claude has its reasoning context.
+    //    Claude decides for each comment: fix code, explain reasoning, or thank.
+    console.log(
+        `[pr-lifecycle] PR #${prNumber} — ${unprocessedComments.length} comment(s) → sending to Claude${task.sessionId ? " (resuming session)" : " (fresh session)"}`,
     );
+    await updateTask(task.id, { prState: "addressing" as PrState });
 
-    if (actionableComments.length > 0) {
-        console.log(
-            `[pr-lifecycle] ${actionableComments.length} actionable comment(s) — spinning up agent`,
-        );
-        await updateTask(task.id, { prState: "addressing" as PrState });
+    const reviewContext = unprocessedComments
+        .map((c) => {
+            const location = c.path
+                ? `File: ${c.path}${c.line ? `:${c.line}` : ""}`
+                : "General";
+            return `[Comment ID: ${c.githubCommentId}] [${location}] @${c.reviewer}:\n${c.body}`;
+        })
+        .join("\n\n---\n\n");
 
-        const reviewContext = actionableComments
-            .map((c) => {
-                const location = c.path
-                    ? `File: ${c.path}${c.line ? `:${c.line}` : ""}`
-                    : "General";
-                return `[${location}] @${c.reviewer}: ${c.body}`;
-            })
-            .join("\n\n");
+    try {
+        const result = await invoke<WorkResult>("engine_address_review", {
+            taskId: task.id,
+            repositoryId: task.repositoryId,
+            repoPath,
+            branchName: task.branchName,
+            baseBranch: task.baseBranch ?? "main",
+            reviewComments: reviewContext,
+            prDescription: task.description ?? task.title,
+            resumeSessionId: task.sessionId ?? undefined,
+        });
 
-        try {
-            const result = await invoke<WorkResult>("engine_address_review", {
-                taskId: task.id,
-                repositoryId: task.repositoryId,
+        if (result.success) {
+            // Push any code changes
+            const pushResult = await invoke<{
+                success: boolean;
+                error?: string;
+            }>("engine_push_branch", {
                 repoPath,
                 branchName: task.branchName,
-                baseBranch: task.baseBranch ?? "main",
-                reviewComments: reviewContext,
-                prDescription: task.description ?? task.title,
             });
 
-            if (result.success) {
-                const pushResult = await invoke<{
-                    success: boolean;
-                    error?: string;
-                }>("engine_push_branch", {
-                    repoPath,
-                    branchName: task.branchName,
-                });
+            // Parse Claude's structured output for per-comment replies
+            let replies: ClaudeReviewReply[] = [];
+            try {
+                const jsonMatch = result.summary?.match(
+                    /\{[\s\S]*"replies"[\s\S]*\}/,
+                );
+                if (jsonMatch) {
+                    const parsed = JSON.parse(jsonMatch[0]) as {
+                        replies?: ClaudeReviewReply[];
+                    };
+                    replies = parsed.replies ?? [];
+                }
+            } catch {
+                console.log(
+                    `[pr-lifecycle] could not parse structured replies from Claude output`,
+                );
+            }
 
-                if (pushResult.success) {
-                    for (const c of actionableComments) {
+            console.log(
+                `[pr-lifecycle] Claude returned ${replies.length} reply(ies), push=${pushResult.success}`,
+            );
+
+            // Post replies to GitHub and update DB
+            for (const r of replies) {
+                if (!r.reply) continue;
+                try {
+                    await replyToComment(
+                        repoPath,
+                        owner,
+                        repo,
+                        prNumber,
+                        r.comment_id,
+                        r.reply,
+                    );
+                    await setCommentReply(r.comment_id, r.reply);
+
+                    if (r.made_code_changes && result.commitSha) {
                         await markCommentAddressed(
-                            c.githubCommentId,
-                            result.commitSha ?? "",
+                            r.comment_id,
+                            result.commitSha,
                         );
                     }
 
-                    const summary =
-                        result.summary ?? "Addressed review comments";
+                    console.log(
+                        `[pr-lifecycle] replied to comment ${r.comment_id} (code_changes=${r.made_code_changes})`,
+                    );
+                } catch (e) {
+                    console.error(
+                        `[pr-lifecycle] failed to post reply for comment ${r.comment_id}:`,
+                        e,
+                    );
+                }
+            }
+
+            // For any comments Claude didn't return a reply for, mark as addressed if code changed
+            if (pushResult.success && result.commitSha) {
+                for (const c of unprocessedComments) {
+                    const hasReply = replies.some(
+                        (r) => r.comment_id === c.githubCommentId,
+                    );
+                    if (!hasReply) {
+                        await markCommentAddressed(
+                            c.githubCommentId,
+                            result.commitSha,
+                        );
+                    }
+                }
+            }
+
+            // Post summary comment on the PR if code was pushed
+            if (pushResult.success && result.commitSha) {
+                const codeChangeReplies = replies.filter(
+                    (r) => r.made_code_changes,
+                );
+                if (codeChangeReplies.length > 0) {
                     await postPrComment(
                         repoPath,
                         owner,
                         repo,
                         prNumber,
-                        `I've addressed the review feedback:\n\n${summary}\n\nCommit: ${result.commitSha ?? "latest"}`,
+                        `Addressed ${codeChangeReplies.length} review comment(s) in commit ${result.commitSha.slice(0, 7)}.`,
                     );
-
-                    // Re-request review if we know who reviewed
-                    const reviewer = latestReview?.user.login;
-                    if (reviewer) {
-                        try {
-                            await requestReview(
-                                repoPath,
-                                owner,
-                                repo,
-                                prNumber,
-                                [reviewer],
-                            );
-                        } catch (e) {
-                            console.warn(
-                                `[pr-lifecycle] re-request review failed:`,
-                                e,
-                            );
-                        }
-                    }
-
-                    await updateTask(task.id, {
-                        prState: "re_review_requested" as PrState,
-                        commitSha: result.commitSha,
-                    });
-                    await recordPrEvent(
-                        task.id,
-                        "pr_comment_addressed",
-                        `Agent pushed commit ${result.commitSha?.slice(0, 7) ?? "?"} addressing ${actionableComments.length} comment(s)`,
-                    );
-                } else {
-                    console.error(
-                        `[pr-lifecycle] push failed:`,
-                        pushResult.error,
-                    );
-                    await updateTask(task.id, {
-                        prState: "in_review" as PrState,
-                        lastError: `Failed to push changes: ${pushResult.error}`,
-                    });
                 }
-            } else {
-                console.error(
-                    `[pr-lifecycle] address review failed:`,
-                    result.error,
-                );
-                await updateTask(task.id, {
-                    prState: "in_review" as PrState,
-                    lastError: result.error ?? "Failed to address review",
-                });
             }
-        } catch (e) {
-            console.error(`[pr-lifecycle] address review error:`, e);
+
+            // Re-request review
+            const reviewer = latestReview?.user.login;
+            if (reviewer) {
+                try {
+                    await requestReview(repoPath, owner, repo, prNumber, [
+                        reviewer,
+                    ]);
+                } catch {
+                    // Not critical
+                }
+            }
+
+            await updateTask(task.id, {
+                prState: "re_review_requested" as PrState,
+                commitSha: result.commitSha ?? task.commitSha,
+                sessionId: result.sessionId ?? task.sessionId,
+            });
+            await recordPrEvent(
+                task.id,
+                "pr_comment_addressed",
+                `Agent processed ${unprocessedComments.length} comment(s)${result.commitSha ? ` — commit ${result.commitSha.slice(0, 7)}` : ""}`,
+            );
+        } else {
+            console.error(
+                `[pr-lifecycle] address review failed:`,
+                result.error,
+            );
             await updateTask(task.id, {
                 prState: "in_review" as PrState,
-                lastError: e instanceof Error ? e.message : String(e),
+                lastError: result.error ?? "Failed to address review",
             });
         }
+    } catch (e) {
+        console.error(`[pr-lifecycle] address review error:`, e);
+        await updateTask(task.id, {
+            prState: "in_review" as PrState,
+            lastError: e instanceof Error ? e.message : String(e),
+        });
     }
 }
 
@@ -564,7 +453,7 @@ export async function prLifecycleTick(): Promise<void> {
 
     console.log("[pr-lifecycle] tick — checking for active PRs...");
 
-    // First, backfill any tasks that have a pr_url but no pr_state/pr_number
+    // Backfill tasks with pr_url but no pr_state
     await backfillPrState();
 
     const activePrs = await getTasksWithActivePr();
@@ -586,7 +475,7 @@ export async function prLifecycleTick(): Promise<void> {
         const repo = repoMap.get(pr.repositoryId);
         if (!repo) {
             console.log(
-                `[pr-lifecycle] skipping PR ${pr.prNumber} — repo ${pr.repositoryId} not found`,
+                `[pr-lifecycle] skipping PR ${pr.prNumber} — repo not found`,
             );
             continue;
         }
@@ -594,7 +483,7 @@ export async function prLifecycleTick(): Promise<void> {
         const task = await getTask(pr.id);
         if (!task) {
             console.log(
-                `[pr-lifecycle] skipping PR ${pr.prNumber} — task ${pr.id} not found`,
+                `[pr-lifecycle] skipping PR ${pr.prNumber} — task not found`,
             );
             continue;
         }
