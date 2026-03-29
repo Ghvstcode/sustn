@@ -18,12 +18,14 @@ import {
     listComments,
     updateCommentClassification,
     markCommentAddressed,
+    setCommentReply,
 } from "@core/db/pr-lifecycle";
 import {
     parseOwnerRepo,
     listPrReviews,
     listPrComments,
     getPrStatus,
+    replyToComment,
     postPrComment,
     requestReview,
 } from "@core/services/github";
@@ -337,7 +339,7 @@ export async function processTaskPr(
             `@${latestReview.user.login} requested changes (cycle ${task.prReviewCycles + 1})`,
         );
 
-        // 8. Handle conversational comments that need replies
+        // 8. Handle conversational comments — auto-reply
         const conversationalToReply = refreshedDbComments.filter(
             (c) =>
                 c.classification === "conversational" &&
@@ -345,12 +347,44 @@ export async function processTaskPr(
                 !c.inReplyToId,
         );
 
-        // Don't auto-reply for now — the heuristic classifier isn't reliable
-        // enough to draft replies. The user can reply from the diff viewer.
-        if (conversationalToReply.length > 0) {
-            console.log(
-                `[pr-lifecycle] ${conversationalToReply.length} conversational comment(s) — user can reply from diff viewer`,
-            );
+        for (const conv of conversationalToReply) {
+            // Use the heuristic's suggested reply, or a generic acknowledgment
+            const classResult = classifyCommentsHeuristic([
+                {
+                    id: conv.githubCommentId,
+                    user: { login: conv.reviewer },
+                    body: conv.body,
+                    path: conv.path ?? null,
+                    line: conv.line ?? null,
+                    side: conv.side ?? null,
+                    original_line: null,
+                    commit_id: null,
+                    in_reply_to_id: null,
+                    created_at: conv.createdAt,
+                    updated_at: conv.createdAt,
+                },
+            ]);
+            const reply = classResult[0]?.reply ?? "Thanks for the feedback!";
+
+            try {
+                await replyToComment(
+                    repoPath,
+                    owner,
+                    repo,
+                    prNumber,
+                    conv.githubCommentId,
+                    reply,
+                );
+                await setCommentReply(conv.githubCommentId, reply);
+                console.log(
+                    `[pr-lifecycle] replied to conversational comment ${conv.githubCommentId}: "${reply}"`,
+                );
+            } catch (e) {
+                console.error(
+                    `[pr-lifecycle] failed to reply to comment ${conv.githubCommentId}:`,
+                    e,
+                );
+            }
         }
 
         // 9. Handle actionable comments — address via agent
