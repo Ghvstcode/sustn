@@ -740,38 +740,77 @@ After making any code changes and committing, output ONLY this JSON (no markdown
 The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in each comment above. Do NOT use null."#
     );
 
-    let result = worker::execute_task(
+    // Ensure we're on the right branch
+    if engine::git::branch_exists(&repo_path, &branch_name) {
+        engine::git::checkout_branch(&repo_path, &branch_name);
+    } else {
+        engine::git::create_branch_from(&repo_path, &branch_name, &base_branch);
+    }
+
+    // Call Claude CLI directly with our exact prompt (not through worker,
+    // which overrides the prompt with its own resume template)
+    let cli_result = engine::invoke_claude_cli(
         &repo_path,
-        &task_id,
-        "Address PR review comments",
         &prompt,
-        &[],
-        2,
-        &base_branch,
-        &branch_name,
-        Some(review_comments),
-        resume_session_id,
-        agent_prefs.as_deref(),
+        1800, // 30 min timeout
+        None,
+        None,
+        resume_session_id.as_deref(),
     )
     .await;
+
+    // Get commit SHA after Claude ran
+    let sha_result = engine::git::latest_commit_sha(&repo_path);
+    let commit_sha = if sha_result.success { Some(sha_result.output) } else { None };
+    let session_id = cli_result.as_ref().ok().and_then(|r| r.session_id.clone());
+
+    // Build result
+    let (success, summary, error) = match &cli_result {
+        Ok(r) if r.success => {
+            // Extract the result text from Claude's JSON wrapper
+            let summary = if let Ok(v) = serde_json::from_str::<serde_json::Value>(&r.stdout) {
+                v.get("result")
+                    .and_then(|r| r.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| r.stdout.clone())
+            } else {
+                r.stdout.clone()
+            };
+            (true, Some(summary), None)
+        }
+        Ok(r) => (false, None, Some(format!("Claude CLI returned error: {}", r.stderr))),
+        Err(e) => (false, None, Some(e.clone())),
+    };
+
+    let result = worker::WorkResult {
+        success,
+        phase_reached: engine::TaskPhase::Implementing,
+        branch_name: Some(branch_name.clone()),
+        commit_sha: commit_sha.clone(),
+        files_modified: vec![],
+        summary: summary.clone(),
+        review_warnings: None,
+        error: error.clone(),
+        session_id: session_id.clone(),
+    };
 
     {
         let mut current = state.current_task.lock().await;
         *current = None;
     }
 
-    if result.success {
+    if success {
         let _ = app.emit("agent:review-addressed", serde_json::json!({
             "taskId": task_id,
             "repositoryId": repository_id,
-            "branchName": result.branch_name,
-            "commitSha": result.commit_sha,
+            "branchName": branch_name,
+            "commitSha": commit_sha,
         }));
     } else {
         let _ = app.emit("agent:review-address-failed", serde_json::json!({
             "taskId": task_id,
             "repositoryId": repository_id,
-            "error": result.error,
+            "error": error,
         }));
     }
 
