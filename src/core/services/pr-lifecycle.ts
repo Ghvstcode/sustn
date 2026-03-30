@@ -287,6 +287,10 @@ export async function processTaskPr(
         });
 
         if (result.success) {
+            console.log(
+                `[pr-lifecycle] engine_address_review succeeded — summary length=${result.summary?.length ?? 0}, commitSha=${result.commitSha}, sessionId=${result.sessionId}`,
+            );
+
             // Push any code changes
             const pushResult = await invoke<{
                 success: boolean;
@@ -296,11 +300,18 @@ export async function processTaskPr(
                 branchName: task.branchName,
             });
 
+            console.log(
+                `[pr-lifecycle] push result: success=${pushResult.success}, error=${pushResult.error}`,
+            );
+
             // Parse Claude's structured output for per-comment replies
             let replies: ClaudeReviewReply[] = [];
             try {
                 const jsonMatch = result.summary?.match(
                     /\{[\s\S]*"replies"[\s\S]*\}/,
+                );
+                console.log(
+                    `[pr-lifecycle] JSON match found: ${!!jsonMatch}, length=${jsonMatch?.[0]?.length ?? 0}`,
                 );
                 if (jsonMatch) {
                     const parsed = JSON.parse(jsonMatch[0]) as {
@@ -308,9 +319,11 @@ export async function processTaskPr(
                     };
                     replies = parsed.replies ?? [];
                 }
-            } catch {
-                console.log(
-                    `[pr-lifecycle] could not parse structured replies from Claude output`,
+            } catch (parseErr) {
+                console.error(
+                    `[pr-lifecycle] could not parse structured replies:`,
+                    parseErr,
+                    `summary preview: ${result.summary?.slice(0, 200)}`,
                 );
             }
 
@@ -396,6 +409,9 @@ export async function processTaskPr(
                 }
             }
 
+            console.log(
+                `[pr-lifecycle] all replies posted, updating state to re_review_requested`,
+            );
             await updateTask(task.id, {
                 prState: "re_review_requested" as PrState,
                 commitSha: result.commitSha ?? task.commitSha,
@@ -418,10 +434,18 @@ export async function processTaskPr(
         }
     } catch (e) {
         console.error(`[pr-lifecycle] address review error:`, e);
-        await updateTask(task.id, {
-            prState: "in_review" as PrState,
-            lastError: e instanceof Error ? e.message : String(e),
-        });
+        // Always transition out of "addressing" even on error
+        try {
+            await updateTask(task.id, {
+                prState: "in_review" as PrState,
+                lastError: e instanceof Error ? e.message : String(e),
+            });
+        } catch (updateErr) {
+            console.error(
+                `[pr-lifecycle] CRITICAL: failed to update task state after error:`,
+                updateErr,
+            );
+        }
     }
 }
 
