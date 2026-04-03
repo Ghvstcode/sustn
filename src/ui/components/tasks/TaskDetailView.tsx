@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
     ArrowUp,
     Play,
@@ -31,6 +32,7 @@ import {
 } from "@core/api/useEngine";
 import { useQueueStore } from "@core/store/queue-store";
 import { useGlobalSettings, useProjectOverrides } from "@core/api/useSettings";
+import { usePrComments } from "@core/api/usePrLifecycle";
 import { generateBranchName, effectiveBaseBranch } from "@core/utils/branch";
 import { useAppStore } from "@core/store/app-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -47,6 +49,7 @@ import { TaskFilesInvolved } from "./TaskFilesInvolved";
 import { TaskStatusBanner } from "./TaskStatusBanner";
 import { queuedToast } from "@ui/lib/toast";
 import { FileContentViewer } from "./FileContentViewer";
+import { ErrorBoundary } from "@ui/components/ErrorBoundary";
 
 // ── Constants ───────────────────────────────────────────────
 
@@ -267,6 +270,7 @@ interface TaskDetailViewProps {
 export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     const { data: task, isLoading } = useTask(taskId);
     const { data: repositories } = useRepositories();
+    const queryClient = useQueryClient();
     const updateTask = useUpdateTask();
     const deleteTask = useDeleteTask();
     const startTask = useStartTask();
@@ -346,6 +350,63 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
         showDiff && hasBranch ? repoPath : undefined,
         showDiff && hasBranch ? baseBranch : undefined,
         showDiff && hasBranch ? task?.branchName : undefined,
+    );
+
+    // PR comments from GitHub
+    const { data: prComments } = usePrComments(
+        task?.prState ? taskId : undefined,
+    );
+
+    const ghCommentsForDiff = useMemo(
+        () =>
+            (prComments ?? []).map((c) => ({
+                id: c.id,
+                githubCommentId: c.githubCommentId,
+                reviewer: c.reviewer,
+                body: c.body,
+                path: c.path,
+                line: c.line,
+                side: c.side,
+                classification: c.classification,
+                ourReply: c.ourReply,
+                addressedInCommit: c.addressedInCommit,
+                createdAt: c.createdAt,
+            })),
+        [prComments],
+    );
+
+    const handleReplyToGhComment = useCallback(
+        async (commentId: number, body: string) => {
+            if (!task?.prUrl || !repoPath) return;
+            try {
+                const { replyToComment, parseOwnerRepo } =
+                    await import("@core/services/github");
+                const parsed = parseOwnerRepo(task.prUrl);
+                if (!parsed) return;
+                await replyToComment(
+                    repoPath,
+                    parsed.owner,
+                    parsed.repo,
+                    parsed.number,
+                    commentId,
+                    body,
+                );
+                // Update local DB
+                const { setCommentReply } =
+                    await import("@core/db/pr-lifecycle");
+                await setCommentReply(commentId, body);
+                // Invalidate to refresh
+                void queryClient.invalidateQueries({
+                    queryKey: ["pr-comments", taskId],
+                });
+            } catch (e) {
+                console.error(
+                    "[TaskDetailView] reply to GH comment failed:",
+                    e,
+                );
+            }
+        },
+        [task?.prUrl, repoPath, taskId, queryClient],
     );
 
     const isReadOnly = task?.state === "done" || task?.state === "dismissed";
@@ -560,9 +621,20 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                             },
                             {
                                 onSuccess: (pr) => {
+                                    const prMatch =
+                                        pr.url.match(/\/pull\/(\d+)/);
+                                    const prNumber = prMatch
+                                        ? parseInt(prMatch[1], 10)
+                                        : undefined;
                                     updateTask.mutate({
                                         id: taskId,
                                         prUrl: pr.url,
+                                        ...(prNumber
+                                            ? {
+                                                  prState: "opened" as const,
+                                                  prNumber,
+                                              }
+                                            : {}),
                                     });
                                     sendMessage.mutate({
                                         taskId,
@@ -589,7 +661,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                                 ),
                                             );
                                     }
-                                    handleUpdateState("done");
+                                    // Task stays in "review" — PR lifecycle drives transition to "done"
                                 },
                                 onError: (err) => {
                                     sendMessage.mutate({
@@ -597,7 +669,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                         role: "system",
                                         content: `Branch ${task.branchName} pushed to remote. PR creation failed: ${err instanceof Error ? err.message : String(err)}. Create it manually.`,
                                     });
-                                    handleUpdateState("done");
+                                    // Task stays in "review" even on PR failure
                                 },
                             },
                         );
@@ -732,18 +804,21 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     let sidebarActions: React.ReactNode = null;
 
     if (state === "review") {
+        const hasPr = !!task.prUrl;
         sidebarActions = (
             <>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className={btnClass}
-                    onClick={handleRequestChanges}
-                >
-                    <MessageSquarePlus className="h-3.5 w-3.5" />
-                    Request Changes
-                </Button>
-                {task.branchName && !task.prUrl ? (
+                {!hasPr && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className={btnClass}
+                        onClick={handleRequestChanges}
+                    >
+                        <MessageSquarePlus className="h-3.5 w-3.5" />
+                        Request Changes
+                    </Button>
+                )}
+                {task.branchName && !hasPr ? (
                     <Button
                         size="sm"
                         className={btnClass}
@@ -757,28 +832,36 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                         )}
                         Approve & Create PR
                     </Button>
-                ) : (
+                ) : hasPr ? (
                     <>
                         <Button
                             size="sm"
+                            variant="outline"
+                            className={btnClass}
+                            onClick={() => void openUrl(task.prUrl!)}
+                        >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            View PR
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="ghost"
                             className={btnClass}
                             onClick={() => handleUpdateState("done")}
                         >
                             <CheckCircle2 className="h-3.5 w-3.5" />
-                            Approve
+                            Mark Done
                         </Button>
-                        {task.prUrl && (
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                className={btnClass}
-                                onClick={() => void openUrl(task.prUrl!)}
-                            >
-                                <ExternalLink className="h-3.5 w-3.5" />
-                                View PR
-                            </Button>
-                        )}
                     </>
+                ) : (
+                    <Button
+                        size="sm"
+                        className={btnClass}
+                        onClick={() => handleUpdateState("done")}
+                    >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Approve
+                    </Button>
                 )}
             </>
         );
@@ -874,17 +957,26 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                     {isShowingDiff ? (
                         diffText ? (
                             <div className="px-6 pt-4 pb-8">
-                                <TaskDiffViewer
-                                    diffText={diffText}
-                                    singleFile={activeTab}
-                                    comments={inlineComments}
-                                    onAddComment={
-                                        task.state === "review"
-                                            ? handleAddComment
-                                            : undefined
-                                    }
-                                    onRemoveComment={handleRemoveComment}
-                                />
+                                <ErrorBoundary
+                                    level="widget"
+                                    heading="Diff viewer crashed"
+                                >
+                                    <TaskDiffViewer
+                                        diffText={diffText}
+                                        singleFile={activeTab}
+                                        comments={inlineComments}
+                                        ghComments={ghCommentsForDiff}
+                                        onAddComment={
+                                            task.state === "review"
+                                                ? handleAddComment
+                                                : undefined
+                                        }
+                                        onRemoveComment={handleRemoveComment}
+                                        onReplyToGhComment={
+                                            handleReplyToGhComment
+                                        }
+                                    />
+                                </ErrorBoundary>
                             </div>
                         ) : (
                             <div className="flex h-32 items-center justify-center">

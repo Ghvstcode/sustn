@@ -550,6 +550,273 @@ pub struct AugmentTaskResult {
     pub category: String,
 }
 
+/// Run a `gh api` GET request and return the raw JSON output.
+#[tauri::command]
+pub async fn run_gh_api(
+    repo_path: String,
+    endpoint: String,
+    accept: Option<String>,
+) -> Result<GhApiResult, String> {
+    let gh = crate::preflight::resolve_gh_binary_pub();
+
+    let mut cmd = std::process::Command::new(&gh);
+    cmd.args(["api", &endpoint]);
+    if let Some(accept_header) = accept {
+        cmd.args(["-H", &format!("Accept: {accept_header}")]);
+    }
+    cmd.current_dir(&repo_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to execute gh: {e}"))?;
+
+    Ok(GhApiResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+/// Run a `gh api` POST request with a JSON body.
+#[tauri::command]
+pub async fn run_gh_api_post(
+    repo_path: String,
+    endpoint: String,
+    body: String,
+) -> Result<GhApiResult, String> {
+    let gh = crate::preflight::resolve_gh_binary_pub();
+
+    let output = std::process::Command::new(&gh)
+        .args(["api", &endpoint, "--method", "POST", "--input", "-"])
+        .current_dir(&repo_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                stdin.write_all(body.as_bytes())?;
+            }
+            child.wait_with_output()
+        })
+        .map_err(|e| format!("Failed to execute gh: {e}"))?;
+
+    Ok(GhApiResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhApiResult {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Address PR review comments by invoking Claude CLI with the review context.
+/// Resumes the original session when available so Claude has full reasoning context.
+#[tauri::command]
+pub async fn engine_address_review(
+    app: AppHandle,
+    state: State<'_, Arc<EngineState>>,
+    task_id: String,
+    repository_id: String,
+    repo_path: String,
+    branch_name: String,
+    base_branch: String,
+    review_comments: String,
+    pr_description: String,
+    resume_session_id: Option<String>,
+) -> Result<worker::WorkResult, String> {
+    println!(
+        "[engine_address_review] task_id={task_id}, branch={branch_name}, comments_len={}, resume={:?}",
+        review_comments.len(),
+        resume_session_id,
+    );
+
+    // Wait for deep scan
+    {
+        loop {
+            let is_scanning = state.deep_scanning_repos.lock().await.contains(&repository_id);
+            if !is_scanning { break; }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+
+    if let Some(issue) = engine::git::preflight_check(&repo_path) {
+        return Err(format!("Environment issue: {}", issue.error));
+    }
+
+    // Budget check
+    {
+        let app_data_dir = app.path().app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+        let mut config = db::read_budget_config(&app_data_dir);
+        let effective_ceiling = db::read_effective_ceiling_percent(&app_data_dir, &repository_id);
+        if effective_ceiling < config.max_usage_percent {
+            config.max_usage_percent = effective_ceiling;
+        }
+        let status = budget::calculate_budget_status(&config);
+        if status.budget_exhausted {
+            return Err("Budget exhausted — cannot address review".to_string());
+        }
+    }
+
+    {
+        let current = state.current_task.lock().await;
+        if current.is_some() {
+            return Err("Another task is already in progress".to_string());
+        }
+    }
+
+    {
+        let mut current = state.current_task.lock().await;
+        *current = Some(CurrentTask {
+            task_id: task_id.clone(),
+            repository_id: repository_id.clone(),
+            phase: TaskPhase::Implementing,
+            started_at: chrono::Local::now().to_rfc3339(),
+        });
+    }
+
+    let _ = app.emit("agent:task-started", serde_json::json!({
+        "taskId": task_id,
+        "repositoryId": repository_id,
+    }));
+
+    let (agent_prefs, _) = {
+        let app_data_dir = app.path().app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+        db::read_project_preferences(&app_data_dir, &repository_id)
+    };
+
+    let prefs_section = match agent_prefs.as_deref() {
+        Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Instructions\n{prefs}"),
+        _ => String::new(),
+    };
+
+    let prompt = format!(
+        r#"IMPORTANT: You are running as an automated background agent in non-interactive mode. Commit your changes directly — do NOT ask for permission.
+
+A human reviewer has left comments on the PR you created. You need to handle EVERY comment — either by making code changes or by drafting a reply.
+
+## PR Description
+{pr_description}
+
+## Review Comments
+Each comment below has a COMMENT_ID number that you MUST include in your response.
+
+{review_comments}
+{prefs_section}
+
+## Instructions
+For EACH review comment above:
+
+1. **If it requires code changes** (bug fix, refactor, improvement, the reviewer is questioning an approach and they're right): make the changes, commit with trailer SUSTN-Task: {task_id}, and draft a reply explaining what you changed.
+
+2. **If it's a question about your reasoning** (why did you do X?): explain your reasoning clearly — you have context from when you wrote this code.
+
+3. **If it's praise or acknowledgment** (looks good, nice, etc.): draft a brief thanks.
+
+CRITICAL: You MUST return a reply for EVERY comment. Use the exact COMMENT_ID number from each comment header above.
+
+After making any code changes and committing, output ONLY this JSON (no markdown):
+{{
+  "replies": [
+    {{
+      "comment_id": 1234567890,
+      "reply": "Your response to this specific comment",
+      "made_code_changes": true
+    }}
+  ],
+  "summary": "Brief description of what was changed",
+  "files_modified": ["list", "of", "files"]
+}}
+
+The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in each comment above. Do NOT use null."#
+    );
+
+    // Ensure we're on the right branch
+    if engine::git::branch_exists(&repo_path, &branch_name) {
+        engine::git::checkout_branch(&repo_path, &branch_name);
+    } else {
+        engine::git::create_branch_from(&repo_path, &branch_name, &base_branch);
+    }
+
+    // Call Claude CLI directly with our exact prompt (not through worker,
+    // which overrides the prompt with its own resume template)
+    let cli_result = engine::invoke_claude_cli(
+        &repo_path,
+        &prompt,
+        1800, // 30 min timeout
+        None,
+        None,
+        resume_session_id.as_deref(),
+    )
+    .await;
+
+    // Get commit SHA after Claude ran
+    let sha_result = engine::git::latest_commit_sha(&repo_path);
+    let commit_sha = if sha_result.success { Some(sha_result.output) } else { None };
+    let session_id = cli_result.as_ref().ok().and_then(|r| r.session_id.clone());
+
+    // Build result
+    let (success, summary, error) = match &cli_result {
+        Ok(r) if r.success => {
+            // Extract the result text from Claude's JSON wrapper
+            let summary = if let Ok(v) = serde_json::from_str::<serde_json::Value>(&r.stdout) {
+                v.get("result")
+                    .and_then(|r| r.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| r.stdout.clone())
+            } else {
+                r.stdout.clone()
+            };
+            (true, Some(summary), None)
+        }
+        Ok(r) => (false, None, Some(format!("Claude CLI returned error: {}", r.stderr))),
+        Err(e) => (false, None, Some(e.clone())),
+    };
+
+    let result = worker::WorkResult {
+        success,
+        phase_reached: engine::TaskPhase::Implementing,
+        branch_name: Some(branch_name.clone()),
+        commit_sha: commit_sha.clone(),
+        files_modified: vec![],
+        summary: summary.clone(),
+        review_warnings: None,
+        error: error.clone(),
+        session_id: session_id.clone(),
+    };
+
+    {
+        let mut current = state.current_task.lock().await;
+        *current = None;
+    }
+
+    if success {
+        let _ = app.emit("agent:review-addressed", serde_json::json!({
+            "taskId": task_id,
+            "repositoryId": repository_id,
+            "branchName": branch_name,
+            "commitSha": commit_sha,
+        }));
+    } else {
+        let _ = app.emit("agent:review-address-failed", serde_json::json!({
+            "taskId": task_id,
+            "repositoryId": repository_id,
+            "error": error,
+        }));
+    }
+
+    Ok(result)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineStatusResponse {

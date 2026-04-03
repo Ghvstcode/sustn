@@ -34,6 +34,10 @@ export interface GlobalSettings {
     // Integrations
     linearApiKey: string;
     linearEnabled: boolean;
+
+    // PR Lifecycle
+    prLifecycleEnabled: boolean;
+    maxReviewCycles: number;
 }
 
 export interface ProjectOverrides {
@@ -43,6 +47,7 @@ export interface ProjectOverrides {
     overrideBranchPrefixMode: BranchPrefixMode | undefined;
     overrideBranchPrefixCustom: string | undefined;
     overrideBudgetCeilingPercent: number | undefined;
+    overridePrAutoReply: boolean | undefined;
     agentPreferences: string | undefined;
     scanPreferences: string | undefined;
 }

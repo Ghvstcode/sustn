@@ -29,7 +29,50 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@ui/components/ui/dropdown-menu";
-import type { Task } from "@core/types/task";
+import { GitPullRequest } from "lucide-react";
+import type { Task, PrState } from "@core/types/task";
+
+function prStateDisplayLabel(state: PrState): string {
+    switch (state) {
+        case "opened":
+            return "PR Opened";
+        case "in_review":
+            return "In Review";
+        case "changes_requested":
+            return "Changes Requested";
+        case "addressing":
+            return "Addressing Feedback";
+        case "re_review_requested":
+            return "Re-review Requested";
+        case "approved":
+            return "Approved";
+        case "merged":
+            return "Merged";
+        case "needs_human_attention":
+            return "Needs Your Attention";
+        default:
+            return state;
+    }
+}
+
+function prStateChipStyle(state: PrState): string {
+    switch (state) {
+        case "opened":
+        case "in_review":
+        case "re_review_requested":
+            return "border-blue-400/40 bg-blue-500/10 text-blue-500";
+        case "changes_requested":
+            return "border-amber-400/40 bg-amber-500/10 text-amber-500";
+        case "addressing":
+            return "border-violet-400/40 bg-violet-500/10 text-violet-500";
+        case "approved":
+            return "border-green-400/40 bg-green-500/10 text-green-500";
+        case "needs_human_attention":
+            return "border-red-400/40 bg-red-500/10 text-red-500";
+        default:
+            return "border-border text-muted-foreground";
+    }
+}
 
 interface TaskDetailHeaderProps {
     task: Task;
@@ -212,6 +255,21 @@ export function TaskDetailHeader({
                         </TooltipContent>
                     </Tooltip>
                 </TooltipProvider>
+            )}
+
+            {/* PR lifecycle state */}
+            {task.prState && task.prState !== "merged" && (
+                <div
+                    className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium shrink-0 ${prStateChipStyle(task.prState)}`}
+                >
+                    <GitPullRequest className="h-3 w-3 shrink-0" />
+                    {prStateDisplayLabel(task.prState)}
+                    {task.prReviewCycles > 0 && (
+                        <span className="text-[10px] opacity-60">
+                            ({task.prReviewCycles})
+                        </span>
+                    )}
+                </div>
             )}
 
             {/* Primary action */}

@@ -18,6 +18,7 @@ import {
 } from "@core/db/tasks";
 import { listRepositories } from "@core/db/repositories";
 import { addComment as addLinearComment } from "@core/services/linear";
+import { parseOwnerRepo } from "@core/services/github";
 import type {
     BudgetConfig,
     BudgetStatus,
@@ -471,14 +472,22 @@ async function handleTaskResult(
                 }
             }
 
+            const prMeta = prUrl ? parseOwnerRepo(prUrl) : undefined;
+
             await dbUpdateTaskWithRetry(variables.taskId, {
-                state: prUrl ? ("done" as const) : ("review" as const),
+                state: "review" as const,
                 baseBranch: variables.baseBranch,
                 branchName: result.branchName,
                 commitSha: result.commitSha,
                 sessionId: result.sessionId,
                 completedAt: new Date().toISOString(),
                 ...(prUrl ? { prUrl } : {}),
+                ...(prMeta
+                    ? {
+                          prState: "opened" as const,
+                          prNumber: prMeta.number,
+                      }
+                    : {}),
             });
 
             if (notify && settings.notificationsEnabled) {

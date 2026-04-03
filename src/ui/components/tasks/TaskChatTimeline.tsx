@@ -10,6 +10,7 @@ import {
     Link,
     Bot,
     User,
+    GitPullRequest,
 } from "lucide-react";
 import { useTaskEvents, useTaskMessages } from "@core/api/useTasks";
 import type { TaskEvent, TaskMessage } from "@core/types/task";
@@ -50,6 +51,17 @@ const stateLabels: Record<string, string> = {
     failed: "Failed",
 };
 
+const prStateLabels: Record<string, string> = {
+    opened: "PR Opened",
+    in_review: "In Review",
+    changes_requested: "Changes Requested",
+    addressing: "Addressing Feedback",
+    re_review_requested: "Re-review Requested",
+    approved: "Approved",
+    merged: "Merged",
+    needs_human_attention: "Needs Your Attention",
+};
+
 // ── Event rendering ────────────────────────────────────────
 
 function EventIcon({ eventType }: { eventType: string }) {
@@ -69,6 +81,9 @@ function EventIcon({ eventType }: { eventType: string }) {
             return <Tag className={cls} />;
         case "pr_url_change":
             return <Link className={cls} />;
+        case "pr_event":
+        case "pr_state_change":
+            return <GitPullRequest className={cls} />;
         default:
             return <Pencil className={cls} />;
     }
@@ -125,6 +140,17 @@ function EventDescription({ event }: { event: TaskEvent }) {
             );
         case "pr_url_change":
             return <span>PR link updated</span>;
+        case "pr_state_change":
+            return (
+                <span>
+                    PR moved to{" "}
+                    <span className="font-medium">
+                        {prStateLabels[event.newValue ?? ""] ?? event.newValue}
+                    </span>
+                </span>
+            );
+        case "pr_event":
+            return <span>{event.comment}</span>;
         default:
             return <span>{event.eventType}</span>;
     }

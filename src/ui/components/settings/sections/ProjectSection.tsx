@@ -27,6 +27,7 @@ import {
 } from "@ui/components/ui/select";
 import { Button } from "@ui/components/ui/button";
 import { Slider } from "@ui/components/ui/slider";
+import { Switch } from "@ui/components/ui/switch";
 import type { BranchPrefixMode } from "@core/types/settings";
 import type { ScheduleMode } from "@core/types/agent";
 import { Trash2, Clock, Zap, Hand, RefreshCw, Loader2, X } from "lucide-react";
@@ -160,6 +161,9 @@ export function ProjectSection({
         agentConfig !== undefined &&
         agentConfig.scheduleMode !== globalSettings.agentMode;
     const isBudgetCustom = overrides.overrideBudgetCeilingPercent !== undefined;
+    const effectivePrAutoReply =
+        overrides.overridePrAutoReply ?? globalSettings.prLifecycleEnabled;
+    const isPrAutoReplyCustom = overrides.overridePrAutoReply !== undefined;
 
     // ── Branch preview ──
     const prefixStr =
@@ -542,6 +546,45 @@ export function ProjectSection({
                                     clearOverride({
                                         repositoryId,
                                         field: "overrideBudgetCeilingPercent",
+                                    })
+                                }
+                                className="text-[11px] text-muted-foreground/50 hover:text-foreground transition-colors"
+                            >
+                                Reset
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* PR auto-reply */}
+                <div className="flex items-start justify-between gap-8 py-5">
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground">
+                            PR auto-reply
+                        </p>
+                        <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+                            Automatically address PR review comments and
+                            re-request review.
+                        </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                        <Switch
+                            checked={effectivePrAutoReply}
+                            onCheckedChange={(checked) =>
+                                updateOverride({
+                                    repositoryId,
+                                    field: "overridePrAutoReply",
+                                    value: checked,
+                                })
+                            }
+                        />
+                        {isPrAutoReplyCustom && (
+                            <button
+                                type="button"
+                                onClick={() =>
+                                    clearOverride({
+                                        repositoryId,
+                                        field: "overridePrAutoReply",
                                     })
                                 }
                                 className="text-[11px] text-muted-foreground/50 hover:text-foreground transition-colors"

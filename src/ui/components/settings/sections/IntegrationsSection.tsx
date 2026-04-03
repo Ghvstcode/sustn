@@ -468,6 +468,88 @@ export function IntegrationsSection() {
                     </div>
                 )}
             </div>
+
+            {/* PR Lifecycle Management */}
+            <div className="mt-10">
+                <div
+                    className="animate-fade-in-up"
+                    style={{ animationDelay: "250ms" }}
+                >
+                    <div className="flex items-center gap-2 mb-2">
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="18"
+                            height="18"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="text-foreground"
+                        >
+                            <circle cx="18" cy="18" r="3" />
+                            <circle cx="6" cy="6" r="3" />
+                            <path d="M13 6h3a2 2 0 0 1 2 2v7" />
+                            <path d="M6 9v12" />
+                        </svg>
+                        <h2 className="text-sm font-medium text-foreground">
+                            PR Lifecycle
+                        </h2>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-4">
+                        Automatically monitor PRs opened by SUSTN, address
+                        reviewer feedback, and re-request reviews.
+                    </p>
+                </div>
+
+                <div
+                    className="space-y-1 animate-fade-in-up"
+                    style={{ animationDelay: "300ms" }}
+                >
+                    <SettingsRow
+                        label="Enable PR lifecycle"
+                        sublabel="Poll GitHub for review events and auto-address feedback"
+                    >
+                        <Switch
+                            checked={settings.prLifecycleEnabled}
+                            onCheckedChange={(checked) =>
+                                updateSetting({
+                                    key: "prLifecycleEnabled",
+                                    value: checked,
+                                })
+                            }
+                        />
+                    </SettingsRow>
+
+                    <SettingsRow
+                        label="Max review cycles"
+                        sublabel="After this many change-request rounds, flag for human attention"
+                    >
+                        <div className="flex items-center gap-2">
+                            <Input
+                                type="number"
+                                min={1}
+                                max={20}
+                                className="w-20 h-8 text-sm"
+                                value={settings.maxReviewCycles}
+                                onChange={(e) => {
+                                    const val = parseInt(e.target.value, 10);
+                                    if (!isNaN(val) && val >= 1 && val <= 20) {
+                                        updateSetting({
+                                            key: "maxReviewCycles",
+                                            value: val,
+                                        });
+                                    }
+                                }}
+                            />
+                            <span className="text-xs text-muted-foreground">
+                                cycles
+                            </span>
+                        </div>
+                    </SettingsRow>
+                </div>
+            </div>
         </div>
     );
 }
