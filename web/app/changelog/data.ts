@@ -16,6 +16,34 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
     {
+        version: "0.5.0",
+        date: "Apr 3rd, 2026",
+        title: "PR Lifecycle & Auto-Reply",
+        description:
+            "Full pull request lifecycle management with GitHub comment sync, inline review threads in the diff viewer, and automatic AI replies to PR conversations.",
+        image: {
+            src: "/changelog/0.5.0-pr-lifecycle.png",
+            alt: "PR review with inline comments and conversation threads",
+        },
+        features: [
+            "PR lifecycle management — track PRs from creation through review, addressing feedback, and merge, with real-time status in the activity timeline",
+            "GitHub PR comments in diff viewer — review comments from GitHub are displayed inline alongside the code diff for full context",
+            "Auto-reply for PR comments — SUSTN automatically responds to conversational PR comments using a unified Claude session, with a per-repo toggle to enable or disable",
+            "React error boundaries — component-level crash isolation prevents a single UI failure from taking down the entire app",
+        ],
+        improvements: [
+            "Replaced heuristic comment classifier with a unified Claude session for more accurate review vs. conversational comment handling",
+            "Compact single-card design for PR review comment threads with tighter spacing",
+            "PR lifecycle events now render in the activity timeline with clear status indicators",
+        ],
+        fixes: [
+            "Fixed `null` `comment_id` in Claude review responses causing failed comment syncs",
+            "Fixed comment classification so conversational comments are processed without requiring a formal review cycle",
+            "PR comments now always sync correctly — removed stale filter that was hiding the bot's own replies",
+            "Bypassed worker queue for `engine_address_review` to call Claude directly, preventing stuck addressing state",
+        ],
+    },
+    {
         version: "0.4.0",
         date: "Mar 26th, 2026",
         title: "Kanban Board & Task Filtering",
