@@ -42,6 +42,10 @@ export function usePrLifecyclePoller() {
                 await prLifecycleTick();
                 // Invalidate relevant queries after each tick
                 void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+                void queryClient.invalidateQueries({ queryKey: ["task"] });
+                void queryClient.invalidateQueries({
+                    queryKey: ["task-events"],
+                });
                 void queryClient.invalidateQueries({
                     queryKey: ["pr-reviews"],
                 });

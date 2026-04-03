@@ -453,12 +453,16 @@ export async function processTaskPr(
 
 async function recordPrEvent(
     taskId: string,
-    _eventType: string,
+    eventType: string,
     comment: string,
 ): Promise<void> {
     try {
-        const { addComment } = await import("@core/db/tasks");
-        await addComment(taskId, `[PR] ${comment}`);
+        const { recordPublicEvent } = await import("@core/db/tasks");
+        await recordPublicEvent(taskId, {
+            eventType: "pr_event",
+            field: eventType,
+            comment,
+        });
     } catch (e) {
         console.error(`[pr-lifecycle] failed to record event:`, e);
     }

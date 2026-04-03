@@ -431,6 +431,28 @@ export async function addComment(
     return rowToTaskEvent(rows[0]);
 }
 
+export async function recordPublicEvent(
+    taskId: string,
+    opts: {
+        eventType: string;
+        field?: string;
+        oldValue?: string;
+        newValue?: string;
+        comment?: string;
+    },
+): Promise<void> {
+    const db = await getDb();
+    await recordEvent(
+        db,
+        taskId,
+        opts.eventType,
+        opts.field,
+        opts.oldValue,
+        opts.newValue,
+        opts.comment,
+    );
+}
+
 export async function listTaskEvents(taskId: string): Promise<TaskEvent[]> {
     const db = await getDb();
     const rows = await db.select<TaskEventRow[]>(
