@@ -47,6 +47,7 @@ export interface ProjectOverrides {
     overrideBranchPrefixMode: BranchPrefixMode | undefined;
     overrideBranchPrefixCustom: string | undefined;
     overrideBudgetCeilingPercent: number | undefined;
+    overridePrAutoReply: boolean | undefined;
     agentPreferences: string | undefined;
     scanPreferences: string | undefined;
 }

@@ -355,5 +355,14 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        // Migration 17: per-repo PR auto-reply override
+        Migration {
+            version: 17,
+            description: "add per-repo pr auto-reply override",
+            sql: r#"
+                ALTER TABLE agent_config ADD COLUMN override_pr_auto_reply INTEGER;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

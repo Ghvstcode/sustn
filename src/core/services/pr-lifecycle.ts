@@ -28,7 +28,7 @@ import {
     requestReview,
 } from "@core/services/github";
 import { listRepositories } from "@core/db/repositories";
-import { getGlobalSettings } from "@core/db/settings";
+import { getGlobalSettings, getProjectOverrides } from "@core/db/settings";
 import type { WorkResult } from "@core/types/agent";
 import type { PrState, Task } from "@core/types/task";
 import type { GhPrComment, GhPrReview } from "@core/services/github";
@@ -51,6 +51,7 @@ export async function processTaskPr(
     task: Task,
     repoPath: string,
     maxReviewCycles: number,
+    autoReplyEnabled: boolean = true,
 ): Promise<void> {
     if (!task.prUrl || !task.prNumber) return;
 
@@ -251,7 +252,15 @@ export async function processTaskPr(
         );
     }
 
-    // 8. If no unprocessed comments, nothing for the agent to do
+    // 8. If auto-reply is disabled for this repo, stop after syncing
+    if (!autoReplyEnabled) {
+        console.log(
+            `[pr-lifecycle] PR #${prNumber} — auto-reply disabled for this repo, skipping`,
+        );
+        return;
+    }
+
+    // 8b. If no unprocessed comments, nothing for the agent to do
     if (unprocessedComments.length === 0) {
         console.log(`[pr-lifecycle] PR #${prNumber} — no unprocessed comments`);
         return;
@@ -518,12 +527,17 @@ export async function prLifecycleTick(): Promise<void> {
             continue;
         }
 
+        // Resolve per-repo auto-reply setting (override ?? global)
+        const overrides = await getProjectOverrides(pr.repositoryId);
+        const autoReply =
+            overrides.overridePrAutoReply ?? settings.prLifecycleEnabled;
+
         console.log(
-            `[pr-lifecycle] processing PR #${pr.prNumber} (${task.title}) — prState=${task.prState}, repo=${repo.name}`,
+            `[pr-lifecycle] processing PR #${pr.prNumber} (${task.title}) — prState=${task.prState}, repo=${repo.name}, autoReply=${autoReply}`,
         );
 
         try {
-            await processTaskPr(task, repo.path, maxCycles);
+            await processTaskPr(task, repo.path, maxCycles, autoReply);
         } catch (e) {
             console.error(`[pr-lifecycle] error processing ${pr.prUrl}:`, e);
         }

@@ -19,6 +19,7 @@ interface ProjectOverrideRow {
     override_branch_prefix_mode: string | null;
     override_branch_prefix_custom: string | null;
     override_budget_ceiling_percent: number | null;
+    override_pr_auto_reply: number | null;
     agent_preferences: string | null;
     scan_preferences: string | null;
 }
@@ -159,6 +160,10 @@ function rowToProjectOverrides(row: ProjectOverrideRow): ProjectOverrides {
             row.override_branch_prefix_custom ?? undefined,
         overrideBudgetCeilingPercent:
             row.override_budget_ceiling_percent ?? undefined,
+        overridePrAutoReply:
+            row.override_pr_auto_reply != null
+                ? row.override_pr_auto_reply === 1
+                : undefined,
         agentPreferences: row.agent_preferences ?? undefined,
         scanPreferences: row.scan_preferences ?? undefined,
     };
@@ -178,7 +183,8 @@ export async function getProjectOverrides(
     const rows = await db.select<ProjectOverrideRow[]>(
         `SELECT repository_id, override_base_branch, override_remote_origin,
                 override_branch_prefix_mode, override_branch_prefix_custom,
-                override_budget_ceiling_percent, agent_preferences, scan_preferences
+                override_budget_ceiling_percent, override_pr_auto_reply,
+                agent_preferences, scan_preferences
          FROM agent_config WHERE repository_id = $1`,
         [repositoryId],
     );
@@ -192,6 +198,7 @@ export async function getProjectOverrides(
         overrideBranchPrefixMode: undefined,
         overrideBranchPrefixCustom: undefined,
         overrideBudgetCeilingPercent: undefined,
+        overridePrAutoReply: undefined,
         agentPreferences: undefined,
         scanPreferences: undefined,
     };
@@ -203,9 +210,12 @@ const OVERRIDE_COLUMN_MAP: Record<string, string> = {
     overrideBranchPrefixMode: "override_branch_prefix_mode",
     overrideBranchPrefixCustom: "override_branch_prefix_custom",
     overrideBudgetCeilingPercent: "override_budget_ceiling_percent",
+    overridePrAutoReply: "override_pr_auto_reply",
     agentPreferences: "agent_preferences",
     scanPreferences: "scan_preferences",
 };
+
+const BOOLEAN_OVERRIDE_FIELDS = new Set(["overridePrAutoReply"]);
 
 export async function updateProjectOverride(
     repositoryId: string,
@@ -221,9 +231,17 @@ export async function updateProjectOverride(
         [repositoryId],
     );
 
+    // SQLite stores booleans as INTEGER (0/1)
+    const dbValue =
+        BOOLEAN_OVERRIDE_FIELDS.has(field) && typeof value === "boolean"
+            ? value
+                ? 1
+                : 0
+            : (value ?? null);
+
     await db.execute(
         `UPDATE agent_config SET ${column} = $1 WHERE repository_id = $2`,
-        [value ?? null, repositoryId],
+        [dbValue, repositoryId],
     );
 }
 
