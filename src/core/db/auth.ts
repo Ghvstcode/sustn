@@ -26,22 +26,35 @@ async function getDb() {
     return await Database.load(config.dbUrl);
 }
 
-function rowToRecord(row: AuthRow): AuthRecord {
+export async function getAuth(): Promise<AuthRecord | undefined> {
+    const db = await getDb();
+    const rows = await db.select<AuthRow[]>("SELECT * FROM auth LIMIT 1");
+    if (rows.length === 0) return undefined;
+
+    const row = rows[0];
+
+    // Migrate plaintext token from SQLite to OS keychain on first read
+    if (row.github_access_token) {
+        await invoke("keychain_set_token", {
+            token: row.github_access_token,
+        });
+        await db.execute(
+            "UPDATE auth SET github_access_token = '' WHERE id = $1",
+            [row.id],
+        );
+    }
+
+    const token = await invoke<string | null>("keychain_get_token");
+    if (!token) return undefined;
+
     return {
         id: row.id,
         githubId: row.github_id,
         username: row.github_username,
         avatarUrl: row.github_avatar_url ?? undefined,
         email: row.github_email ?? undefined,
-        accessToken: row.github_access_token,
+        accessToken: token,
     };
-}
-
-export async function getAuth(): Promise<AuthRecord | undefined> {
-    const db = await getDb();
-    const rows = await db.select<AuthRow[]>("SELECT * FROM auth LIMIT 1");
-    if (rows.length === 0) return undefined;
-    return rowToRecord(rows[0]);
 }
 
 export async function saveAuth(params: {
@@ -57,6 +70,9 @@ export async function saveAuth(params: {
     // Delete any existing auth record (single-user app)
     await db.execute("DELETE FROM auth");
 
+    // Store token in OS keychain, not in SQLite
+    await invoke("keychain_set_token", { token: params.accessToken });
+
     await db.execute(
         `INSERT INTO auth (id, github_id, github_username, github_avatar_url, github_email, github_access_token)
          VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -66,7 +82,7 @@ export async function saveAuth(params: {
             params.username,
             params.avatarUrl ?? null,
             params.email ?? null,
-            params.accessToken,
+            "", // empty — token is in OS keychain
         ],
     );
 }
@@ -74,4 +90,5 @@ export async function saveAuth(params: {
 export async function clearAuth(): Promise<void> {
     const db = await getDb();
     await db.execute("DELETE FROM auth");
+    await invoke("keychain_delete_token");
 }
