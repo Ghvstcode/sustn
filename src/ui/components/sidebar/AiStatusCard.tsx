@@ -33,10 +33,16 @@ export function AiStatusCard() {
             : 0;
     const remainingPercent = 100 - usedPercent;
 
-    // Bar color
+    // Bar color and budget level label
     let barColor = "bg-foreground";
-    if (remainingPercent <= 10) barColor = "bg-red-500";
-    else if (remainingPercent <= 30) barColor = "bg-amber-500";
+    let budgetLevel = "";
+    if (remainingPercent <= 10) {
+        barColor = "bg-red-500";
+        budgetLevel = "Critical";
+    } else if (remainingPercent <= 30) {
+        barColor = "bg-amber-500";
+        budgetLevel = "Low";
+    }
 
     // Status display
     let icon: React.ReactNode;
@@ -136,7 +142,14 @@ export function AiStatusCard() {
                 {/* Budget bar */}
                 {budget && (
                     <div className="mt-2.5">
-                        <div className="h-1 w-full rounded-full bg-sidebar-border/40 overflow-hidden">
+                        <div
+                            role="progressbar"
+                            aria-label="Budget remaining"
+                            aria-valuenow={Math.round(remainingPercent)}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            className="h-1 w-full rounded-full bg-sidebar-border/40 overflow-hidden"
+                        >
                             <div
                                 className={`h-full rounded-full transition-all ${barColor}`}
                                 style={{
@@ -145,6 +158,12 @@ export function AiStatusCard() {
                             />
                         </div>
                         <p className="mt-1 text-[10px] tabular-nums text-sidebar-foreground/50">
+                            {budgetLevel && (
+                                <span className="font-medium">
+                                    {budgetLevel}
+                                    {" \u00B7 "}
+                                </span>
+                            )}
                             {Math.round(available / 1000)}k remaining
                         </p>
                     </div>

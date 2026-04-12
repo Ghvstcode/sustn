@@ -38,16 +38,17 @@ export function ProjectList({ search }: ProjectListProps) {
 
     return (
         <ScrollArea className="flex-1">
-            <div className="space-y-1 px-3">
+            <ul className="space-y-1 px-3" aria-label="Projects">
                 {filtered.map((repo) => (
-                    <ProjectItem
-                        key={repo.id}
-                        repository={repo}
-                        isSelected={selectedRepositoryId === repo.id}
-                        onSelect={() => setSelectedRepository(repo.id)}
-                    />
+                    <li key={repo.id}>
+                        <ProjectItem
+                            repository={repo}
+                            isSelected={selectedRepositoryId === repo.id}
+                            onSelect={() => setSelectedRepository(repo.id)}
+                        />
+                    </li>
                 ))}
-            </div>
+            </ul>
         </ScrollArea>
     );
 }

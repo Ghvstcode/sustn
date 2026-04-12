@@ -36,6 +36,7 @@ export function AgentControls({
                 onClick={toggleAgent}
                 disabled={updateConfig.isPending}
                 title={isEnabled ? "Pause agent" : "Resume agent"}
+                aria-label={isEnabled ? "Pause agent" : "Resume agent"}
             >
                 {isEnabled ? (
                     <Pause className="h-3.5 w-3.5" />
