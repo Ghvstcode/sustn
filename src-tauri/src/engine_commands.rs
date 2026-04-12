@@ -263,10 +263,28 @@ pub async fn engine_start_task(
         db::read_project_preferences(&app_data_dir, &repository_id)
     };
 
-    // Execute the task
+    // Create worktree for task isolation
+    let _ = engine::worktree::ensure_gitignore_entry(&repo_path);
+    let worktree_path = engine::worktree::create_worktree(
+        &repo_path,
+        &task_id,
+        &branch_name,
+        &base_branch,
+    )
+    .map_err(|e| {
+        // Clear current_task on worktree creation failure
+        let state_clone = state.inner().clone();
+        tokio::spawn(async move {
+            *state_clone.current_task.lock().await = None;
+        });
+        e
+    })?;
+    println!("[engine_start_task] worktree created at {worktree_path}");
+
+    // Execute the task in the worktree
     println!("[engine_start_task] calling worker::execute_task — max_retries=4");
     let result = worker::execute_task(
-        &repo_path,
+        &worktree_path,
         &task_id,
         &task_title,
         &task_description,
@@ -631,6 +649,7 @@ pub async fn engine_address_review(
     review_comments: String,
     pr_description: String,
     resume_session_id: Option<String>,
+    pr_diff: Option<String>,
 ) -> Result<worker::WorkResult, String> {
     println!(
         "[engine_address_review] task_id={task_id}, branch={branch_name}, comments_len={}, resume={:?}",
@@ -699,14 +718,29 @@ pub async fn engine_address_review(
         _ => String::new(),
     };
 
+    // For imported PRs on the first cycle (no session), include the full diff
+    // so Claude understands the PR before addressing comments.
+    let pr_context_section = match (&resume_session_id, &pr_diff) {
+        (None, Some(diff)) => format!(
+            r#"
+
+## Full PR Diff (you are taking over this PR — study it carefully)
+```diff
+{diff}
+```
+"#
+        ),
+        _ => String::new(),
+    };
+
     let prompt = format!(
         r#"IMPORTANT: You are running as an automated background agent in non-interactive mode. Commit your changes directly — do NOT ask for permission.
 
-A human reviewer has left comments on the PR you created. You need to handle EVERY comment — either by making code changes or by drafting a reply.
+A human reviewer has left comments on a PR. You need to handle EVERY comment — either by making code changes or by drafting a reply.
 
 ## PR Description
 {pr_description}
-
+{pr_context_section}
 ## Review Comments
 Each comment below has a COMMENT_ID number that you MUST include in your response.
 
@@ -740,17 +774,27 @@ After making any code changes and committing, output ONLY this JSON (no markdown
 The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in each comment above. Do NOT use null."#
     );
 
-    // Ensure we're on the right branch
-    if engine::git::branch_exists(&repo_path, &branch_name) {
-        engine::git::checkout_branch(&repo_path, &branch_name);
-    } else {
-        engine::git::create_branch_from(&repo_path, &branch_name, &base_branch);
-    }
+    // Create/reuse worktree for task isolation
+    let _ = engine::worktree::ensure_gitignore_entry(&repo_path);
+    let worktree_path = engine::worktree::create_worktree(
+        &repo_path,
+        &task_id,
+        &branch_name,
+        &base_branch,
+    )
+    .map_err(|e| {
+        let state_clone = state.inner().clone();
+        tokio::spawn(async move {
+            *state_clone.current_task.lock().await = None;
+        });
+        e
+    })?;
+    println!("[engine_address_review] using worktree at {worktree_path}");
 
     // Call Claude CLI directly with our exact prompt (not through worker,
     // which overrides the prompt with its own resume template)
     let cli_result = engine::invoke_claude_cli(
-        &repo_path,
+        &worktree_path,
         &prompt,
         1800, // 30 min timeout
         None,
@@ -760,7 +804,7 @@ The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in eac
     .await;
 
     // Get commit SHA after Claude ran
-    let sha_result = engine::git::latest_commit_sha(&repo_path);
+    let sha_result = engine::git::latest_commit_sha(&worktree_path);
     let commit_sha = if sha_result.success { Some(sha_result.output) } else { None };
     let session_id = cli_result.as_ref().ok().and_then(|r| r.session_id.clone());
 
@@ -815,6 +859,52 @@ The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in eac
     }
 
     Ok(result)
+}
+
+/// Remove a task's worktree (cleanup after completion/dismissal).
+#[tauri::command]
+pub async fn engine_cleanup_worktree(
+    repo_path: String,
+    task_id: String,
+) -> Result<(), String> {
+    engine::worktree::remove_worktree(&repo_path, &task_id)
+}
+
+/// Clone a repository (non-blocking, no credential prompts).
+#[tauri::command]
+pub async fn engine_clone_repo(
+    url: String,
+    destination: String,
+) -> Result<engine::git::GitResult, String> {
+    // Run on blocking thread since clone can take a while
+    tokio::task::spawn_blocking(move || {
+        Ok(engine::git::clone_repo(&url, &destination))
+    })
+    .await
+    .map_err(|e| format!("Clone task failed: {}", e))?
+}
+
+/// Fetch a specific branch from origin (with optional PR number for fork fallback).
+#[tauri::command]
+pub async fn engine_fetch_branch(
+    repo_path: String,
+    branch_name: String,
+    pr_number: Option<u32>,
+) -> Result<engine::git::GitResult, String> {
+    Ok(engine::git::fetch_branch_with_pr(&repo_path, &branch_name, pr_number))
+}
+
+/// Get the remote URL for origin.
+#[tauri::command]
+pub async fn engine_get_remote_url(
+    repo_path: String,
+) -> Result<String, String> {
+    let result = engine::git::get_remote_url(&repo_path);
+    if result.success {
+        Ok(result.output)
+    } else {
+        Err(result.error.unwrap_or_else(|| "Failed to get remote URL".to_string()))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

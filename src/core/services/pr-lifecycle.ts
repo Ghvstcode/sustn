@@ -88,6 +88,15 @@ export async function processTaskPr(
             completedAt: new Date().toISOString(),
         });
         await recordPrEvent(task.id, "pr_merged", `PR #${prNumber} merged`);
+        // Clean up worktree
+        try {
+            await invoke("engine_cleanup_worktree", {
+                repoPath: repoPath,
+                taskId: task.id,
+            });
+        } catch (e) {
+            console.warn(`[pr-lifecycle] worktree cleanup failed:`, e);
+        }
         return;
     }
 
@@ -186,8 +195,33 @@ export async function processTaskPr(
 
     // 5. Determine which comments need processing
     const refreshedDbComments = await listComments(task.id);
+
+    // Fetch resolved thread IDs from GitHub to skip already-resolved conversations
+    let resolvedIds = new Set<number>();
+    try {
+        const { getResolvedThreadCommentIds } =
+            await import("@core/services/github");
+        resolvedIds = await getResolvedThreadCommentIds(
+            repoPath,
+            owner,
+            repo,
+            prNumber,
+        );
+        if (resolvedIds.size > 0) {
+            console.log(
+                `[pr-lifecycle] PR #${prNumber} — ${resolvedIds.size} resolved thread(s), skipping`,
+            );
+        }
+    } catch (e) {
+        console.warn(`[pr-lifecycle] failed to fetch resolved threads:`, e);
+    }
+
     const unprocessedComments = refreshedDbComments.filter(
-        (c) => !c.ourReply && !c.addressedInCommit && !c.inReplyToId,
+        (c) =>
+            !c.ourReply &&
+            !c.addressedInCommit &&
+            !c.inReplyToId &&
+            !resolvedIds.has(c.githubCommentId),
     );
 
     if (task.prState === "opened") {
@@ -274,6 +308,21 @@ export async function processTaskPr(
     );
     await updateTask(task.id, { prState: "addressing" as PrState });
 
+    // For imported PRs on the first addressing cycle, fetch the full diff
+    // so Claude has context about the PR before addressing comments.
+    let prDiff: string | undefined;
+    if (task.source === "imported" && !task.sessionId) {
+        try {
+            const { getPrDiff } = await import("@core/services/github");
+            prDiff = await getPrDiff(repoPath, owner, repo, prNumber);
+            console.log(
+                `[pr-lifecycle] fetched PR diff for imported task (${prDiff.length} chars)`,
+            );
+        } catch (e) {
+            console.warn(`[pr-lifecycle] failed to fetch PR diff:`, e);
+        }
+    }
+
     const reviewContext = unprocessedComments
         .map((c) => {
             const location = c.path
@@ -293,6 +342,7 @@ export async function processTaskPr(
             reviewComments: reviewContext,
             prDescription: task.description ?? task.title,
             resumeSessionId: task.sessionId ?? undefined,
+            prDiff: prDiff ?? null,
         });
 
         if (result.success) {
@@ -510,6 +560,9 @@ export async function prLifecycleTick(): Promise<void> {
     const repoMap = new Map(repos.map((r) => [r.id, r]));
     const maxCycles = settings.maxReviewCycles ?? 5;
 
+    // Process all active PRs. Syncing comments is fast (GitHub API),
+    // but addressing (Claude CLI) is slow and mutex-guarded — so we
+    // process them sequentially but each PR gets synced every tick.
     for (const pr of activePrs) {
         const repo = repoMap.get(pr.repositoryId);
         if (!repo) {
@@ -523,6 +576,15 @@ export async function prLifecycleTick(): Promise<void> {
         if (!task) {
             console.log(
                 `[pr-lifecycle] skipping PR ${pr.prNumber} — task not found`,
+            );
+            continue;
+        }
+
+        // Skip PRs that are currently being addressed (from a previous tick
+        // or from the immediate trigger on import)
+        if (task.prState === "addressing") {
+            console.log(
+                `[pr-lifecycle] skipping PR #${pr.prNumber} — already being addressed`,
             );
             continue;
         }

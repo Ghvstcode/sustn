@@ -8,7 +8,7 @@ pub struct GitResult {
     pub error: Option<String>,
 }
 
-fn run_git(cwd: &str, args: &[&str]) -> GitResult {
+pub(crate) fn run_git(cwd: &str, args: &[&str]) -> GitResult {
     match Command::new("git").args(args).current_dir(cwd).output() {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -255,6 +255,103 @@ pub fn detect_default_branch(cwd: &str) -> String {
     }
 
     "main".to_string()
+}
+
+/// Clone a repository. Runs in the parent directory of `destination`.
+/// Uses GIT_TERMINAL_PROMPT=0 to prevent interactive credential prompts
+/// from hanging the process. Skips LFS to avoid downloading large
+/// binary files that aren't needed for code review.
+pub fn clone_repo(url: &str, destination: &str) -> GitResult {
+    let dest_path = std::path::Path::new(destination);
+
+    // Create parent directory if needed
+    if let Some(parent) = dest_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    match Command::new("git")
+        .args(["clone", url, destination])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .output()
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if output.status.success() {
+                GitResult {
+                    success: true,
+                    output: destination.to_string(),
+                    error: None,
+                }
+            } else {
+                GitResult {
+                    success: false,
+                    output: stdout,
+                    error: Some(stderr),
+                }
+            }
+        }
+        Err(e) => GitResult {
+            success: false,
+            output: String::new(),
+            error: Some(format!("Failed to execute git clone: {}", e)),
+        },
+    }
+}
+
+/// Fetch a specific branch from origin and create a local branch.
+/// Tries the branch name first, then falls back to `pull/<number>/head`
+/// for fork-based PRs where the branch doesn't exist on the upstream remote.
+pub fn fetch_branch(cwd: &str, branch_name: &str) -> GitResult {
+    fetch_branch_with_pr(cwd, branch_name, None)
+}
+
+/// Fetch a branch, with an optional PR number for fork-based PR fallback.
+pub fn fetch_branch_with_pr(cwd: &str, branch_name: &str, pr_number: Option<u32>) -> GitResult {
+    // Try fetching by branch name first (works for same-repo PRs)
+    let refspec = format!(
+        "refs/heads/{}:refs/remotes/origin/{}",
+        branch_name, branch_name
+    );
+    let fetch = run_git(cwd, &["fetch", "origin", &refspec]);
+
+    if !fetch.success {
+        if let Some(pr_num) = pr_number {
+            // Fallback: fetch via GitHub's PR ref (works for fork-based PRs)
+            println!(
+                "[git] branch {} not found on origin, trying pull/{}/head",
+                branch_name, pr_num
+            );
+            let pr_refspec = format!(
+                "refs/pull/{}/head:refs/remotes/origin/{}",
+                pr_num, branch_name
+            );
+            let pr_fetch = run_git(cwd, &["fetch", "origin", &pr_refspec]);
+            if !pr_fetch.success {
+                return pr_fetch;
+            }
+        } else {
+            return fetch;
+        }
+    }
+
+    // Delete stale local branch if it exists (may point to wrong commit)
+    let _ = run_git(cwd, &["branch", "-D", branch_name]);
+    // Create local branch from the fetched ref
+    run_git(
+        cwd,
+        &[
+            "branch",
+            branch_name,
+            &format!("origin/{}", branch_name),
+        ],
+    )
+}
+
+/// Get the remote URL for origin.
+pub fn get_remote_url(cwd: &str) -> GitResult {
+    run_git(cwd, &["remote", "get-url", "origin"])
 }
 
 /// Generate a branch name for a task.

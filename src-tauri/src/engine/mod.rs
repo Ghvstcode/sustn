@@ -5,6 +5,7 @@ pub mod prioritizer;
 pub mod scanner;
 pub mod scheduler;
 pub mod worker;
+pub mod worktree;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

@@ -78,6 +78,39 @@ async function ghApiPost<T>(
     return JSON.parse(result.stdout) as T;
 }
 
+// ── PR Metadata ────────────────────────────────────────────
+
+export interface GhPrMetadata {
+    title: string;
+    body: string;
+    headBranch: string;
+    baseBranch: string;
+    user: { login: string };
+    state: "open" | "closed";
+    merged: boolean;
+}
+
+export async function getPrMetadata(
+    repoPath: string,
+    owner: string,
+    repo: string,
+    prNumber: number,
+): Promise<GhPrMetadata> {
+    const raw = await ghApi<Record<string, unknown>>(
+        repoPath,
+        `repos/${owner}/${repo}/pulls/${prNumber}`,
+    );
+    return {
+        title: raw.title as string,
+        body: (raw.body as string) ?? "",
+        headBranch: (raw.head as { ref: string }).ref,
+        baseBranch: (raw.base as { ref: string }).ref,
+        user: { login: (raw.user as { login: string }).login },
+        state: raw.state as "open" | "closed",
+        merged: raw.merged as boolean,
+    };
+}
+
 // ── PR Status ───────────────────────────────────────────────
 
 export async function getPrStatus(
@@ -189,4 +222,75 @@ export async function getPrDiff(
         throw new Error(`Failed to get PR diff: ${result.stderr}`);
     }
     return result.stdout;
+}
+
+// ── Resolved Threads ──────────────────────────────────────
+
+/**
+ * Fetch the set of root comment IDs whose review thread has been
+ * marked as "Resolved" on GitHub.
+ *
+ * Uses the GraphQL API because the REST API does not expose
+ * thread resolution status.
+ */
+export async function getResolvedThreadCommentIds(
+    repoPath: string,
+    owner: string,
+    repo: string,
+    prNumber: number,
+): Promise<Set<number>> {
+    const query = `
+        query($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                    reviewThreads(first: 100) {
+                        nodes {
+                            isResolved
+                            comments(first: 1) {
+                                nodes { databaseId }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    `;
+
+    try {
+        const result = await ghApiPost<{
+            data?: {
+                repository?: {
+                    pullRequest?: {
+                        reviewThreads?: {
+                            nodes?: Array<{
+                                isResolved: boolean;
+                                comments: {
+                                    nodes: Array<{ databaseId: number }>;
+                                };
+                            }>;
+                        };
+                    };
+                };
+            };
+        }>(repoPath, "graphql", {
+            query,
+            variables: { owner, repo, number: prNumber },
+        });
+
+        const threads =
+            result.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+        const resolvedIds = new Set<number>();
+        for (const thread of threads) {
+            if (thread.isResolved) {
+                const rootComment = thread.comments.nodes[0];
+                if (rootComment) {
+                    resolvedIds.add(rootComment.databaseId);
+                }
+            }
+        }
+        return resolvedIds;
+    } catch (e) {
+        console.warn(`[github] failed to fetch resolved threads:`, e);
+        return new Set();
+    }
 }

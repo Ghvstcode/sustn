@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import {
     listTasks,
     getTask,
@@ -11,6 +12,7 @@ import {
     createMessage as dbCreateMessage,
     listMessages as dbListMessages,
 } from "@core/db/tasks";
+import { listRepositories } from "@core/db/repositories";
 import type {
     Task,
     TaskCategory,
@@ -19,6 +21,23 @@ import type {
     MessageRole,
 } from "@core/types/task";
 import { metrics } from "@core/services/metrics";
+
+async function cleanupWorktree(
+    repositoryId: string,
+    taskId: string,
+): Promise<void> {
+    try {
+        const repos = await listRepositories();
+        const repo = repos.find((r) => r.id === repositoryId);
+        if (!repo) return;
+        await invoke("engine_cleanup_worktree", {
+            repoPath: repo.path,
+            taskId,
+        });
+    } catch (e) {
+        console.warn("[useTasks] worktree cleanup failed:", e);
+    }
+}
 
 export function useTasks(
     repositoryId: string | undefined,
@@ -94,6 +113,11 @@ export function useUpdateTask() {
             void queryClient.invalidateQueries({
                 queryKey: ["task-events", task.id],
             });
+
+            // Clean up worktree when task reaches a terminal state
+            if (task.state === "done" || task.state === "dismissed") {
+                void cleanupWorktree(task.repositoryId, task.id);
+            }
         },
     });
 }

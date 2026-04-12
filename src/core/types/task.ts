@@ -17,7 +17,7 @@ export type TaskState =
     | "dismissed"
     | "failed";
 
-export type TaskSource = "manual" | "scan" | "linear";
+export type TaskSource = "manual" | "scan" | "linear" | "imported";
 export type EstimatedEffort = "low" | "medium" | "high";
 
 export type PrState =
@@ -47,6 +47,7 @@ export interface Task {
     filesInvolved: string[] | undefined;
     baseBranch: string | undefined;
     branchName: string | undefined;
+    worktreePath: string | undefined;
     commitSha: string | undefined;
     sessionId: string | undefined;
     tokensUsed: number;

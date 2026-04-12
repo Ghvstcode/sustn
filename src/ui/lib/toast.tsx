@@ -115,6 +115,48 @@ export function updateAvailableToast(version: string, onInstall: () => void) {
     );
 }
 
+export function prImportProgressToast(toastId: string, step: string) {
+    toast.custom(
+        () => (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-background p-3 shadow-lg max-w-sm">
+                <Loader2 className="h-4 w-4 text-foreground animate-spin shrink-0" />
+                <span className="text-[13px] text-foreground">{step}</span>
+            </div>
+        ),
+        { id: toastId, duration: Infinity },
+    );
+}
+
+export function prImportSuccessToast(toastId: string, prNumber: number) {
+    toast.custom(
+        () => (
+            <div className="flex items-center gap-1.5 rounded-full bg-foreground pl-2 pr-2.5 py-1 shadow-md animate-fade-in-up">
+                <div className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500">
+                    <Check className="h-2 w-2 text-white" strokeWidth={3} />
+                </div>
+                <span className="text-[12px] font-medium text-background">
+                    PR #{prNumber} imported
+                </span>
+            </div>
+        ),
+        { id: toastId, duration: 3000 },
+    );
+}
+
+export function prImportErrorToast(toastId: string, error: string) {
+    toast.custom(
+        () => (
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 shadow-lg max-w-sm">
+                <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                <span className="text-[13px] text-destructive leading-snug">
+                    {error}
+                </span>
+            </div>
+        ),
+        { id: toastId, duration: 5000 },
+    );
+}
+
 function updateInstallingToast() {
     toast.custom(
         () => (

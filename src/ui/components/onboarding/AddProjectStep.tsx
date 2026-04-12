@@ -282,6 +282,17 @@ export function AddProjectStep({ onNext }: AddProjectStepProps) {
                     <AlertDescription>{error}</AlertDescription>
                 </Alert>
             )}
+
+            <div className="mt-8 flex justify-center">
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onNext}
+                    className="text-xs text-muted-foreground/50 hover:text-muted-foreground"
+                >
+                    Skip for now
+                </Button>
+            </div>
         </div>
     );
 }

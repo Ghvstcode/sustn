@@ -364,5 +364,14 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        // Migration 18: worktree path for task isolation
+        Migration {
+            version: 18,
+            description: "add worktree_path to tasks",
+            sql: r#"
+                ALTER TABLE tasks ADD COLUMN worktree_path TEXT;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

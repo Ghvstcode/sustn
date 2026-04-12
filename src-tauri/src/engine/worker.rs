@@ -79,87 +79,8 @@ pub async fn execute_task(
 ) -> WorkResult {
     println!("[worker] execute_task START — task_id={task_id}, title={task_title}, base_branch={base_branch}, branch={branch_name}, files={files_involved:?}, has_user_messages={}, resume_session={:?}", user_messages.is_some(), resume_session_id);
 
-    // Save original branch so we can return to it
-    let original_branch = git::current_branch(repo_path);
-    if !original_branch.success {
-        return WorkResult {
-            success: false,
-            phase_reached: TaskPhase::Planning,
-            branch_name: None,
-            commit_sha: None,
-            files_modified: vec![],
-            summary: None,
-            error: Some(format!(
-                "Could not determine current branch: {}",
-                original_branch.error.unwrap_or_else(|| "unknown error".to_string())
-            )),
-            review_warnings: None,
-            session_id: None,
-        };
-    }
-    let original_branch_name = original_branch.output.clone();
-
-    // Auto-stash if working tree is dirty (safety net for queue transitions)
-    if !git::is_clean(repo_path) {
-        println!("[worker] dirty working tree — auto-stashing");
-        let stash = git::stash(repo_path);
-        if !stash.success {
-            return WorkResult {
-                success: false,
-                phase_reached: TaskPhase::Planning,
-                branch_name: None,
-                commit_sha: None,
-                files_modified: vec![],
-                summary: None,
-                error: Some(
-                    "Working tree is dirty and auto-stash failed. Commit or stash changes manually.".to_string(),
-                ),
-                review_warnings: None,
-                session_id: None,
-            };
-        }
-    }
-
-    // Create task branch from the specified base branch
-    if git::branch_exists(repo_path, branch_name) {
-        // Branch already exists — checkout it
-        let checkout = git::checkout_branch(repo_path, branch_name);
-        if !checkout.success {
-            return WorkResult {
-                success: false,
-                phase_reached: TaskPhase::Planning,
-                branch_name: Some(branch_name.to_string()),
-                commit_sha: None,
-                files_modified: vec![],
-                summary: None,
-                error: Some(format!(
-                    "Failed to checkout branch: {}",
-                    checkout.error.unwrap_or_else(|| "unknown error".to_string())
-                )),
-                review_warnings: None,
-                session_id: None,
-            };
-        }
-    } else {
-        let create = git::create_branch_from(repo_path, branch_name, base_branch);
-        if !create.success {
-            return WorkResult {
-                success: false,
-                phase_reached: TaskPhase::Planning,
-                branch_name: Some(branch_name.to_string()),
-                commit_sha: None,
-                files_modified: vec![],
-                summary: None,
-                error: Some(format!(
-                    "Failed to create branch from {}: {}",
-                    base_branch,
-                    create.error.unwrap_or_else(|| "unknown error".to_string())
-                )),
-                review_warnings: None,
-                session_id: None,
-            };
-        }
-    }
+    // repo_path is a worktree with the task branch already checked out.
+    // No need to save/restore branches or stash — the worktree is isolated.
 
     // Run the implement phase (we skip separate plan phase for now —
     // Claude Code is capable enough to plan inline during implementation)
@@ -200,7 +121,6 @@ pub async fn execute_task(
                 // fail early instead of running a pointless review.
                 if !git::has_commits_ahead(repo_path, base_branch) {
                     println!("[worker] NO COMMITS on branch — Claude likely did not commit");
-                    let _ = git::checkout_branch(repo_path, &original_branch_name);
                     return WorkResult {
                         success: false,
                         phase_reached: TaskPhase::Implementing,
@@ -240,10 +160,9 @@ pub async fn execute_task(
 
                 match review_result {
                     Ok(review) if review.passed.unwrap_or(false) => {
-                        // Success — get commit SHA and return to original branch
+                        // Success — get commit SHA
                         let sha = git::latest_commit_sha(repo_path);
-                        println!("[worker] REVIEW PASSED — sha={:?}, returning to branch {original_branch_name}", sha.output);
-                        let _ = git::checkout_branch(repo_path, &original_branch_name);
+                        println!("[worker] REVIEW PASSED — sha={:?}", sha.output);
 
                         return WorkResult {
                             success: true,
@@ -277,7 +196,6 @@ pub async fn execute_task(
                             if !has_critical {
                                 let sha = git::latest_commit_sha(repo_path);
                                 println!("[worker] SOFT-PASS — no critical issues after {attempt} attempts, accepting with warnings");
-                                let _ = git::checkout_branch(repo_path, &original_branch_name);
                                 return WorkResult {
                                     success: true,
                                     phase_reached: TaskPhase::Reviewing,
@@ -298,8 +216,6 @@ pub async fn execute_task(
                             }
 
                             // Genuine critical issues that couldn't be fixed
-                            let _ =
-                                git::checkout_branch(repo_path, &original_branch_name);
                             return WorkResult {
                                 success: false,
                                 phase_reached: TaskPhase::Reviewing,
@@ -321,7 +237,6 @@ pub async fn execute_task(
                         last_feedback = review.feedback.clone();
                     }
                     Err(e) => {
-                        let _ = git::checkout_branch(repo_path, &original_branch_name);
                         return WorkResult {
                             success: false,
                             phase_reached: TaskPhase::Reviewing,
@@ -337,7 +252,6 @@ pub async fn execute_task(
                 }
             }
             Err(e) => {
-                let _ = git::checkout_branch(repo_path, &original_branch_name);
                 return WorkResult {
                     success: false,
                     phase_reached: TaskPhase::Implementing,

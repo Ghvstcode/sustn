@@ -21,10 +21,10 @@ export function EmptyState() {
                 </svg>
             </div>
             <p className="mt-5 text-sm text-muted-foreground animate-fade-in-up delay-100">
-                Scanning for tasks...
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground/60 animate-fade-in-up delay-200">
                 Select a project from the sidebar to get started.
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground/50 animate-fade-in-up delay-200">
+                Or paste a PR link in the sidebar to import one.
             </p>
         </div>
     );
