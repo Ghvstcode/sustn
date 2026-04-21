@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import {
     Select,
     SelectContent,
@@ -16,6 +17,7 @@ import type {
     ScanFrequency,
 } from "@core/types/settings";
 import { Clock, Zap, Hand } from "lucide-react";
+import { useDebouncedCallback } from "@ui/hooks/useDebouncedCallback";
 
 const AGENT_MODES: {
     value: AgentMode;
@@ -64,6 +66,30 @@ const SCAN_OPTIONS: { value: ScanFrequency; label: string }[] = [
 export function SchedulingSection() {
     const { data: settings } = useGlobalSettings();
     const { mutate: updateSetting } = useUpdateGlobalSetting();
+
+    const [localStart, setLocalStart] = useState(settings?.scheduleStart ?? "");
+    const [localEnd, setLocalEnd] = useState(settings?.scheduleEnd ?? "");
+
+    // Sync local state when server data changes (e.g. undo)
+    useEffect(() => {
+        if (settings?.scheduleStart !== undefined) {
+            setLocalStart(settings.scheduleStart);
+        }
+    }, [settings?.scheduleStart]);
+
+    useEffect(() => {
+        if (settings?.scheduleEnd !== undefined) {
+            setLocalEnd(settings.scheduleEnd);
+        }
+    }, [settings?.scheduleEnd]);
+
+    const debouncedUpdateStart = useDebouncedCallback((value: string) => {
+        updateSetting({ key: "scheduleStart", value });
+    }, 400);
+
+    const debouncedUpdateEnd = useDebouncedCallback((value: string) => {
+        updateSetting({ key: "scheduleEnd", value });
+    }, 400);
 
     if (!settings) return null;
 
@@ -196,13 +222,13 @@ export function SchedulingSection() {
                                 <div className="flex items-center gap-2">
                                     <input
                                         type="time"
-                                        value={settings.scheduleStart}
-                                        onChange={(e) =>
-                                            updateSetting({
-                                                key: "scheduleStart",
-                                                value: e.target.value,
-                                            })
-                                        }
+                                        value={localStart}
+                                        onChange={(e) => {
+                                            setLocalStart(e.target.value);
+                                            debouncedUpdateStart(
+                                                e.target.value,
+                                            );
+                                        }}
                                         className="rounded-md border border-input bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
                                     />
                                     <span className="text-xs text-muted-foreground">
@@ -210,13 +236,11 @@ export function SchedulingSection() {
                                     </span>
                                     <input
                                         type="time"
-                                        value={settings.scheduleEnd}
-                                        onChange={(e) =>
-                                            updateSetting({
-                                                key: "scheduleEnd",
-                                                value: e.target.value,
-                                            })
-                                        }
+                                        value={localEnd}
+                                        onChange={(e) => {
+                                            setLocalEnd(e.target.value);
+                                            debouncedUpdateEnd(e.target.value);
+                                        }}
                                         className="rounded-md border border-input bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
                                     />
                                 </div>
