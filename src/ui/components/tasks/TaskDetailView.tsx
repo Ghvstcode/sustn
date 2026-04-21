@@ -844,7 +844,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                 <div className="mb-5 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2.5">
                                     <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive mt-0.5" />
                                     <p className="text-xs text-destructive leading-relaxed">
-                                        {toFriendlyError(task.lastError)}
+                                        {task.lastError}
                                     </p>
                                 </div>
                             )}
