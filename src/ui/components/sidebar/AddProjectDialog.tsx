@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toFriendlyError } from "@core/utils/friendlyErrors";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, GitBranch, ChevronRight } from "lucide-react";
 import {
@@ -73,7 +74,7 @@ export function AddProjectDialog({
                     onSuccess(repo.id, repo.path);
                     handleClose();
                 },
-                onError: (err: Error) => setError(err.message),
+                onError: (err: Error) => setError(toFriendlyError(err.message)),
             },
         );
     }
@@ -121,7 +122,7 @@ export function AddProjectDialog({
                     onSuccess(repo.id, repo.path);
                     handleClose();
                 },
-                onError: (err: Error) => setError(err.message),
+                onError: (err: Error) => setError(toFriendlyError(err.message)),
             },
         );
     }

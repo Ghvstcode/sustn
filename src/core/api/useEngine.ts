@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { toFriendlyError } from "@core/utils/friendlyErrors";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -450,7 +451,7 @@ async function handleTaskResult(
             );
             await dbUpdateTask(variables.taskId, {
                 state: "failed" as const,
-                lastError: result.error ?? "Unknown error",
+                lastError: toFriendlyError(result.error ?? "Unknown error"),
                 branchName: result.branchName,
                 sessionId: result.sessionId,
             });
@@ -461,7 +462,7 @@ async function handleTaskResult(
                     markTaskNotified(variables.taskId);
                     sendNotification(
                         "Task failed",
-                        `"${variables.taskTitle}" — ${result.error ?? "Unknown error"}`,
+                        `"${variables.taskTitle}" — ${toFriendlyError(result.error ?? "Unknown error")}`,
                     );
                     void incrementBadge();
                 }
@@ -498,7 +499,9 @@ async function handleTaskError(
     try {
         await dbUpdateTask(variables.taskId, {
             state: "failed" as const,
-            lastError: error instanceof Error ? error.message : String(error),
+            lastError: toFriendlyError(
+                error instanceof Error ? error.message : String(error),
+            ),
         });
     } catch (e) {
         console.error("[handleTaskError] failed to persist error state:", e);
@@ -802,7 +805,7 @@ export function useGlobalTaskNotifications() {
                         if (settings.notificationsEnabled) {
                             sendNotification(
                                 "Task failed",
-                                `"${title}" — ${error ?? "Unknown error"}`,
+                                `"${title}" — ${toFriendlyError(error ?? "Unknown error")}`,
                             );
                             void incrementBadge();
                         }

@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { toFriendlyError } from "@core/utils/friendlyErrors";
 import {
     ArrowUp,
     Play,
@@ -502,7 +503,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                             sendMessage.mutate({
                                 taskId,
                                 role: "system",
-                                content: `Failed to push branch ${task.branchName}: ${pushResult.error ?? "Unknown error"}`,
+                                content: `Failed to push branch ${task.branchName}: ${toFriendlyError(pushResult.error ?? "Unknown error")}`,
                             });
                             return;
                         }
@@ -533,7 +534,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                     sendMessage.mutate({
                                         taskId,
                                         role: "system",
-                                        content: `Branch ${task.branchName} pushed to remote. PR creation failed: ${err instanceof Error ? err.message : String(err)}. Create it manually.`,
+                                        content: `Branch ${task.branchName} pushed to remote. PR creation failed: ${toFriendlyError(err instanceof Error ? err.message : String(err))}. You can create the PR manually.`,
                                     });
                                     handleUpdateState("done");
                                 },
@@ -544,7 +545,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                         sendMessage.mutate({
                             taskId,
                             role: "system",
-                            content: `Failed to push branch ${task.branchName}: ${err instanceof Error ? err.message : String(err)}`,
+                            content: `Failed to push branch ${task.branchName}: ${toFriendlyError(err instanceof Error ? err.message : String(err))}`,
                         });
                     },
                 },
@@ -843,7 +844,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                 <div className="mb-5 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2.5">
                                     <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive mt-0.5" />
                                     <p className="text-xs text-destructive leading-relaxed">
-                                        {task.lastError}
+                                        {toFriendlyError(task.lastError)}
                                     </p>
                                 </div>
                             )}
