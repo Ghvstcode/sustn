@@ -44,6 +44,7 @@ import { TaskDiffViewer } from "./TaskDiffViewer";
 import { TaskChangedFilesSidebar } from "./TaskChangedFilesSidebar";
 import { TaskFilesInvolved } from "./TaskFilesInvolved";
 import { TaskStatusBanner } from "./TaskStatusBanner";
+import { toast } from "sonner";
 import { queuedToast } from "@ui/lib/toast";
 import { FileContentViewer } from "./FileContentViewer";
 
@@ -393,14 +394,25 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
 
     const handleFeedbackSend = useCallback(
         (content: string) => {
-            sendMessage.mutate({
-                taskId,
-                role: "user",
-                content,
-            });
-            updateTask.mutate({ id: taskId, state: "pending" as TaskState });
-            setFeedbackMode(false);
-            scrollToBottom();
+            sendMessage
+                .mutateAsync({
+                    taskId,
+                    role: "user",
+                    content,
+                })
+                .then(() =>
+                    updateTask.mutateAsync({
+                        id: taskId,
+                        state: "pending" as TaskState,
+                    }),
+                )
+                .then(() => {
+                    setFeedbackMode(false);
+                    scrollToBottom();
+                })
+                .catch(() => {
+                    toast.error("Failed to send feedback. Please try again.");
+                });
         },
         [taskId, sendMessage, updateTask, scrollToBottom],
     );
