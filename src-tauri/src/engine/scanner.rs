@@ -309,7 +309,7 @@ pub async fn scan_repository(repo_path: &str, scan_preferences: Option<&str>) ->
     let timeout_secs = 300; // 5 minutes
 
     let start = std::time::Instant::now();
-    let result = invoke_claude_cli(repo_path, &augmented_prompt, timeout_secs, Some(&file_context), None, None).await;
+    let result = invoke_claude_cli(repo_path, &augmented_prompt, timeout_secs, Some(&file_context), None, None, None, None).await;
     let elapsed = start.elapsed();
     println!("[engine] pass 1 scan took {:.1}s", elapsed.as_secs_f64());
 
@@ -348,7 +348,7 @@ pub async fn deep_scan_repository(
     let timeout_secs = 600; // 10 minutes — Claude uses tools here
 
     let start = std::time::Instant::now();
-    let result = invoke_claude_cli(repo_path, &deep_prompt, timeout_secs, None, None, None).await;
+    let result = invoke_claude_cli(repo_path, &deep_prompt, timeout_secs, None, None, None, None, None).await;
     let elapsed = start.elapsed();
     println!("[engine] pass 2 deep scan took {:.1}s", elapsed.as_secs_f64());
 

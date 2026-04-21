@@ -10,6 +10,7 @@ pub mod worktree;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
 
 /// Global engine state shared across Tauri commands and the background scheduler.
@@ -64,11 +65,129 @@ pub struct CliResult {
     pub session_id: Option<String>,
 }
 
-/// Extract session_id from Claude CLI JSON output.
-fn extract_session_id(stdout: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(stdout.trim())
-        .ok()
-        .and_then(|v| v.get("session_id")?.as_str().map(|s| s.to_string()))
+/// Event emitted for each line of Claude CLI output during streaming.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskOutputEvent {
+    pub task_id: String,
+    /// Parsed "type" from stream-json: "system", "assistant", "user", "result"
+    pub event_type: Option<String>,
+    /// Structured content blocks extracted from the event
+    pub blocks: Vec<ContentBlock>,
+    /// Full JSON line (for debugging)
+    pub raw: String,
+    pub timestamp: String,
+}
+
+/// A parsed content block from a stream-json event.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentBlock {
+    /// "text", "tool_use", "tool_result", "thinking"
+    pub kind: String,
+    /// Text content, tool summary, or result summary
+    pub text: Option<String>,
+    /// Tool name (for tool_use and tool_result)
+    pub tool_name: Option<String>,
+    /// File path or key input hint (for tool_use)
+    pub tool_target: Option<String>,
+}
+
+/// Extract human-readable content blocks from a stream-json event.
+/// Returns multiple blocks because a single assistant event can contain
+/// both text and tool_use blocks.
+fn extract_blocks(event_type: &str, value: &serde_json::Value) -> Vec<ContentBlock> {
+    match event_type {
+        "assistant" | "user" => {
+            // Both assistant and user events have message.content[] arrays.
+            // Assistant events contain text and tool_use blocks.
+            // User events contain tool_result blocks.
+            value
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|item| extract_block(item))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        "result" => {
+            let text = value
+                .get("result")
+                .and_then(|r| r.as_str())
+                .map(|s| s.chars().take(500).collect::<String>());
+            vec![ContentBlock {
+                kind: "result".to_string(),
+                text,
+                tool_name: None,
+                tool_target: None,
+            }]
+        }
+        _ => vec![],
+    }
+}
+
+fn extract_block(item: &serde_json::Value) -> Option<ContentBlock> {
+    let kind = item.get("type")?.as_str()?;
+    match kind {
+        "text" => Some(ContentBlock {
+            kind: "text".to_string(),
+            text: item.get("text").and_then(|t| t.as_str()).map(String::from),
+            tool_name: None,
+            tool_target: None,
+        }),
+        "tool_use" => {
+            let name = item.get("name").and_then(|n| n.as_str()).map(String::from);
+            let target = item.get("input").and_then(|i| {
+                i.get("file_path")
+                    .or_else(|| i.get("path"))
+                    .or_else(|| i.get("pattern"))
+                    .or_else(|| i.get("command"))
+                    .or_else(|| i.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.chars().take(200).collect::<String>())
+            });
+            Some(ContentBlock {
+                kind: "tool_use".to_string(),
+                text: None,
+                tool_name: name,
+                tool_target: target,
+            })
+        }
+        "tool_result" => {
+            let content_text = item.get("content").and_then(|c| {
+                // tool_result content can be a string or an array of {type, text}
+                if let Some(s) = c.as_str() {
+                    Some(s.chars().take(300).collect::<String>())
+                } else if let Some(arr) = c.as_array() {
+                    arr.iter()
+                        .filter_map(|b| b.get("text")?.as_str())
+                        .next()
+                        .map(|s| s.chars().take(300).collect::<String>())
+                } else {
+                    None
+                }
+            });
+            Some(ContentBlock {
+                kind: "tool_result".to_string(),
+                text: content_text,
+                tool_name: None,
+                tool_target: None,
+            })
+        }
+        "thinking" => Some(ContentBlock {
+            kind: "thinking".to_string(),
+            text: item
+                .get("thinking")
+                .and_then(|t| t.as_str())
+                .map(|s| s.chars().take(300).collect::<String>()),
+            tool_name: None,
+            tool_target: None,
+        }),
+        _ => None,
+    }
 }
 
 /// Resolve the full path to the `claude` CLI binary.
@@ -106,7 +225,11 @@ fn resolve_claude_binary() -> String {
 }
 
 /// Invoke Claude Code CLI with the given prompt in the given working directory.
-/// This is the core primitive that both scanner and worker use.
+///
+/// Uses `--output-format stream-json --verbose` to stream newline-delimited
+/// JSON events in real time. If `app_handle` and `task_id` are provided,
+/// each event is emitted as an `agent:task-output` Tauri event for the
+/// frontend to display live.
 ///
 /// If `stdin_content` is provided, it is piped to the process via stdin
 /// (used to pass pre-read file context, matching nightshift's approach).
@@ -120,31 +243,28 @@ pub async fn invoke_claude_cli(
     stdin_content: Option<&str>,
     max_turns: Option<u32>,
     resume_session_id: Option<&str>,
+    app_handle: Option<tauri::AppHandle>,
+    task_id: Option<&str>,
 ) -> Result<CliResult, String> {
     use std::process::Stdio;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::process::Command;
 
     println!(
-        "[engine] invoke_claude_cli — cwd={cwd}, timeout={timeout_secs}s, prompt_len={}, stdin_len={}, max_turns={:?}",
+        "[engine] invoke_claude_cli — cwd={cwd}, timeout={timeout_secs}s, prompt_len={}, stdin_len={}, max_turns={:?}, streaming={}",
         prompt.len(),
         stdin_content.map_or(0, |s| s.len()),
         max_turns,
+        app_handle.is_some(),
     );
-    println!("[engine] ┌─── PROMPT ───────────────────────────────────────");
-    for line in prompt.lines() {
-        println!("[engine] │ {line}");
-    }
-    println!("[engine] └─────────────────────────────────────────────────");
-
-    let has_stdin = stdin_content.is_some();
 
     let claude_bin = resolve_claude_binary();
     let mut cmd = Command::new(&claude_bin);
     cmd.args([
         "--print",
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
     ]);
     if let Some(session_id) = resume_session_id {
@@ -155,23 +275,20 @@ pub async fn invoke_claude_cli(
         cmd.args(["--max-turns", &turns.to_string()]);
     }
     cmd.current_dir(cwd);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
-    if has_stdin {
+    if stdin_content.is_some() {
         cmd.stdin(Stdio::piped());
     }
 
-    // When we have stdin, we need spawn() to write to it; otherwise .output() is simpler
-    if let Some(content) = stdin_content {
-        let mut child = cmd
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                println!("[engine] claude CLI failed to spawn: {e}");
-                format!("Failed to execute claude CLI: {}", e)
-            })?;
+    let mut child = cmd.spawn().map_err(|e| {
+        println!("[engine] claude CLI failed to spawn: {e}");
+        format!("Failed to execute claude CLI: {}", e)
+    })?;
 
-        // Write stdin content and close the pipe
+    // Write stdin content if provided
+    if let Some(content) = stdin_content {
         if let Some(mut stdin_pipe) = child.stdin.take() {
             let content = content.to_string();
             tokio::spawn(async move {
@@ -179,131 +296,150 @@ pub async fn invoke_claude_cli(
                 let _ = stdin_pipe.shutdown().await;
             });
         }
+    }
 
-        // Take stdout/stderr before wait() so child isn't consumed
-        let stdout_pipe = child.stdout.take();
-        let stderr_pipe = child.stderr.take();
+    // Read stdout line-by-line (stream-json emits one JSON object per line)
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
 
-        let stdout_task = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            if let Some(mut pipe) = stdout_pipe {
-                let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buf).await;
-            }
-            buf
-        });
+    let app_for_stdout = app_handle.clone();
+    let task_id_for_stdout = task_id.map(|s| s.to_string());
 
-        let stderr_task = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            if let Some(mut pipe) = stderr_pipe {
-                let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut buf).await;
-            }
-            buf
-        });
+    let stdout_task = tokio::spawn(async move {
+        let mut lines = Vec::new();
+        let mut session_id: Option<String> = None;
+        let mut result_text: Option<String> = None;
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            child.wait(),
-        )
-        .await;
+        if let Some(pipe) = stdout_pipe {
+            let reader = BufReader::new(pipe);
+            let mut line_stream = reader.lines();
 
-        match result {
-            Ok(Ok(status)) => {
-                let stdout_bytes = stdout_task.await.unwrap_or_default();
-                let stderr_bytes = stderr_task.await.unwrap_or_default();
-                let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-                let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
-                let session_id = extract_session_id(&stdout);
-                println!(
-                    "[engine] claude CLI finished — exit_code={:?}, stdout_len={}, stderr_len={}, session_id={:?}",
-                    status.code(),
-                    stdout.len(),
-                    stderr.len(),
-                    session_id,
-                );
-                println!("[engine] ┌─── STDOUT ──────────────────────────────────────");
-                for line in stdout.lines() {
-                    println!("[engine] │ {line}");
+            while let Ok(Some(line)) = line_stream.next_line().await {
+                if line.trim().is_empty() {
+                    continue;
                 }
-                println!("[engine] └─────────────────────────────────────────────────");
-                if !stderr.is_empty() {
-                    println!("[engine] ┌─── STDERR ──────────────────────────────────────");
-                    for line in stderr.lines() {
-                        println!("[engine] │ {line}");
+
+                // Try to parse as JSON to extract event type and content
+                let parsed = serde_json::from_str::<serde_json::Value>(&line);
+                let event_type = parsed
+                    .as_ref()
+                    .ok()
+                    .and_then(|v| v.get("type")?.as_str().map(|s| s.to_string()));
+                let blocks = parsed
+                    .as_ref()
+                    .ok()
+                    .map(|v| {
+                        let et = event_type.as_deref().unwrap_or("");
+                        extract_blocks(et, v)
+                    })
+                    .unwrap_or_default();
+
+                // Extract session_id and result from the final "result" event
+                if event_type.as_deref() == Some("result") {
+                    if let Ok(ref v) = parsed {
+                        session_id =
+                            v.get("session_id").and_then(|s| s.as_str().map(|s| s.to_string()));
+                        result_text =
+                            v.get("result").and_then(|r| r.as_str().map(|s| s.to_string()));
                     }
-                    println!("[engine] └─────────────────────────────────────────────────");
                 }
-                Ok(CliResult {
-                    success: status.success(),
-                    stdout,
-                    stderr,
-                    exit_code: status.code(),
-                    session_id,
-                })
-            }
-            Ok(Err(e)) => {
-                println!("[engine] claude CLI failed: {e}");
-                Err(format!("Failed to execute claude CLI: {}", e))
-            }
-            Err(_) => {
-                let _ = child.kill().await;
-                println!("[engine] claude CLI timed out after {timeout_secs}s");
-                Err(format!(
-                    "Claude CLI timed out after {} seconds",
-                    timeout_secs
-                ))
+
+                // Skip events with no meaningful content (except system init and result)
+                let should_emit = !blocks.is_empty()
+                    || event_type.as_deref() == Some("system")
+                    || event_type.as_deref() == Some("result");
+
+                if should_emit {
+                    if let (Some(ref app), Some(ref tid)) =
+                        (&app_for_stdout, &task_id_for_stdout)
+                    {
+                        let event = TaskOutputEvent {
+                            task_id: tid.clone(),
+                            event_type: event_type.clone(),
+                            blocks,
+                            raw: line.clone(),
+                            timestamp: chrono::Local::now().to_rfc3339(),
+                        };
+                        let _ = app.emit("agent:task-output", &event);
+                    }
+                }
+
+                lines.push(line);
             }
         }
-    } else {
-        // No stdin — simple .output() path
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            cmd.output(),
-        )
-        .await;
 
-        match result {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                let session_id = extract_session_id(&stdout);
-                println!(
-                    "[engine] claude CLI finished — exit_code={:?}, stdout_len={}, stderr_len={}, session_id={:?}",
-                    output.status.code(),
-                    stdout.len(),
-                    stderr.len(),
-                    session_id,
-                );
-                println!("[engine] ┌─── STDOUT ──────────────────────────────────────");
-                for line in stdout.lines() {
-                    println!("[engine] │ {line}");
-                }
-                println!("[engine] └─────────────────────────────────────────────────");
-                if !stderr.is_empty() {
-                    println!("[engine] ┌─── STDERR ──────────────────────────────────────");
-                    for line in stderr.lines() {
-                        println!("[engine] │ {line}");
-                    }
-                    println!("[engine] └─────────────────────────────────────────────────");
-                }
-                Ok(CliResult {
-                    success: output.status.success(),
-                    stdout,
-                    stderr,
-                    exit_code: output.status.code(),
-                    session_id,
-                })
+        (lines, session_id, result_text)
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        let mut stderr_lines = Vec::new();
+        if let Some(pipe) = stderr_pipe {
+            let reader = BufReader::new(pipe);
+            let mut line_stream = reader.lines();
+            while let Ok(Some(line)) = line_stream.next_line().await {
+                stderr_lines.push(line);
             }
-            Ok(Err(e)) => {
-                println!("[engine] claude CLI failed to execute: {e}");
-                Err(format!("Failed to execute claude CLI: {}", e))
-            }
-            Err(_) => {
-                println!("[engine] claude CLI timed out after {timeout_secs}s");
-                Err(format!(
-                    "Claude CLI timed out after {} seconds",
-                    timeout_secs
-                ))
-            }
+        }
+        stderr_lines
+    });
+
+    // Wait for the process with timeout
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        child.wait(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(status)) => {
+            let (stdout_lines, cli_session_id, result_text) =
+                stdout_task.await.unwrap_or_else(|_| (vec![], None, None));
+            let stderr_lines = stderr_task.await.unwrap_or_default();
+            let stderr = stderr_lines.join("\n");
+
+            // Synthesize stdout as if it came from --output-format json
+            // so that parse_implement_output / parse_review_output still work.
+            let stdout = if let Some(ref result) = result_text {
+                // Build a JSON envelope matching the old format
+                let envelope = serde_json::json!({
+                    "type": "result",
+                    "subtype": "success",
+                    "result": result,
+                    "session_id": cli_session_id,
+                });
+                envelope.to_string()
+            } else {
+                // Fallback: join all lines (shouldn't normally happen)
+                stdout_lines.join("\n")
+            };
+
+            println!(
+                "[engine] claude CLI finished — exit_code={:?}, stdout_len={}, stderr_len={}, session_id={:?}",
+                status.code(),
+                stdout.len(),
+                stderr.len(),
+                cli_session_id,
+            );
+
+            Ok(CliResult {
+                success: status.success(),
+                stdout,
+                stderr,
+                exit_code: status.code(),
+                session_id: cli_session_id,
+            })
+        }
+        Ok(Err(e)) => {
+            println!("[engine] claude CLI failed: {e}");
+            Err(format!("Failed to execute claude CLI: {}", e))
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            println!("[engine] claude CLI timed out after {timeout_secs}s");
+            Err(format!(
+                "Claude CLI timed out after {} seconds",
+                timeout_secs
+            ))
         }
     }
 }

@@ -12,6 +12,7 @@ import {
     Loader2,
     AlertTriangle,
     LayoutDashboard,
+    Terminal,
 } from "lucide-react";
 import {
     useTask,
@@ -50,6 +51,8 @@ import { TaskStatusBanner } from "./TaskStatusBanner";
 import { queuedToast } from "@ui/lib/toast";
 import { FileContentViewer } from "./FileContentViewer";
 import { ErrorBoundary } from "@ui/components/ErrorBoundary";
+import { useTaskOutputStream } from "@ui/hooks/useTaskOutputStream";
+import { TaskLiveOutput } from "./TaskLiveOutput";
 
 // ── Constants ───────────────────────────────────────────────
 
@@ -287,9 +290,26 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
     const isQueued = useQueueStore((s) => s.isQueued(taskId));
     const queuePosition = useQueueStore((s) => s.queuePosition(taskId));
 
+    // ── Live output streaming ──
+    const { lines: outputLines, isStreaming } = useTaskOutputStream(taskId);
+    const showAgentTab =
+        task?.state === "in_progress" || outputLines.length > 0;
+
     // ── Tab state (typed) ──
     const [openTabs, setOpenTabs] = useState<FileTab[]>([]);
     const [activeTab, setActiveTab] = useState("overview");
+
+    // Auto-switch to Agent tab when task starts running
+    const prevStateRef = useRef(task?.state);
+    useEffect(() => {
+        if (
+            prevStateRef.current !== "in_progress" &&
+            task?.state === "in_progress"
+        ) {
+            setActiveTab("agent");
+        }
+        prevStateRef.current = task?.state;
+    }, [task?.state]);
 
     // ── Feedback mode (Request Changes flow) ──
     const [feedbackMode, setFeedbackMode] = useState(false);
@@ -869,7 +889,7 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
 
     // ── Determine content to show ──
 
-    const showTabBar = openTabs.length > 0 || hasChanges;
+    const showTabBar = openTabs.length > 0 || hasChanges || showAgentTab;
 
     return (
         <div className="flex h-full">
@@ -903,6 +923,30 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                 <div className="absolute bottom-0 left-2 right-2 h-0.5 bg-foreground rounded-full" />
                             )}
                         </button>
+
+                        {showAgentTab && (
+                            <button
+                                type="button"
+                                onClick={() => setActiveTab("agent")}
+                                className={`relative flex items-center gap-1.5 px-3 h-full text-xs shrink-0 transition-colors ${
+                                    activeTab === "agent"
+                                        ? "text-foreground font-medium"
+                                        : "text-muted-foreground hover:text-foreground"
+                                }`}
+                            >
+                                {isStreaming && (
+                                    <span className="relative flex h-1.5 w-1.5">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                    </span>
+                                )}
+                                <Terminal className="h-3 w-3" />
+                                Agent
+                                {activeTab === "agent" && (
+                                    <div className="absolute bottom-0 left-2 right-2 h-0.5 bg-foreground rounded-full" />
+                                )}
+                            </button>
+                        )}
 
                         {openTabs.map((tab) => {
                             const isActive = activeTab === tab.path;
@@ -992,6 +1036,11 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                                 relativePath={activeTab}
                             />
                         </div>
+                    ) : activeTab === "agent" ? (
+                        <TaskLiveOutput
+                            lines={outputLines}
+                            isStreaming={isStreaming}
+                        />
                     ) : (
                         <div className="mx-auto w-full max-w-2xl px-6 pt-6 pb-8">
                             {task.state === "in_progress" && (

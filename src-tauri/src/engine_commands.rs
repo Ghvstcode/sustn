@@ -295,6 +295,7 @@ pub async fn engine_start_task(
         user_messages,
         resume_session_id,
         agent_prefs.as_deref(),
+        Some(app.clone()),
     )
     .await;
 
@@ -530,6 +531,8 @@ Output ONLY a JSON array (one entry per task, same order) with no markdown forma
         &prompt,
         300, // 5 min timeout
         Some(&context),
+        None,
+        None,
         None,
         None,
     )
@@ -800,6 +803,8 @@ The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in eac
         None,
         None,
         resume_session_id.as_deref(),
+        Some(app.clone()),
+        Some(&task_id),
     )
     .await;
 

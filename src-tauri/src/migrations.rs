@@ -373,5 +373,23 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        // Migration 19: persisted agent streaming events per task
+        Migration {
+            version: 19,
+            description: "add task_agent_events table for streamed agent output",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS task_agent_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    event_type TEXT,
+                    blocks_json TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_task_agent_events_task
+                    ON task_agent_events(task_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

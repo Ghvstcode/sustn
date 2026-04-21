@@ -45,6 +45,21 @@ export interface EngineStatus {
     currentTask: CurrentTask | undefined;
 }
 
+export interface ContentBlock {
+    kind: "text" | "tool_use" | "tool_result" | "thinking" | "result";
+    text: string | undefined;
+    toolName: string | undefined;
+    toolTarget: string | undefined;
+}
+
+export interface TaskOutputEvent {
+    taskId: string;
+    eventType: string | undefined;
+    blocks: ContentBlock[];
+    raw: string;
+    timestamp: string;
+}
+
 export interface ScanResult {
     success: boolean;
     tasksFound: ScannedTask[];

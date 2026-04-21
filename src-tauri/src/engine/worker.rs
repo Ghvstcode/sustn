@@ -76,6 +76,7 @@ pub async fn execute_task(
     user_messages: Option<String>,
     resume_session_id: Option<String>,
     agent_preferences: Option<&str>,
+    app_handle: Option<tauri::AppHandle>,
 ) -> WorkResult {
     println!("[worker] execute_task START — task_id={task_id}, title={task_title}, base_branch={base_branch}, branch={branch_name}, files={files_involved:?}, has_user_messages={}, resume_session={:?}", user_messages.is_some(), resume_session_id);
 
@@ -97,7 +98,7 @@ pub async fn execute_task(
 
         println!("[worker] running implement phase...");
         let implement_result =
-            run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback, current_resume_id.as_deref(), agent_preferences)
+            run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback, current_resume_id.as_deref(), agent_preferences, app_handle.clone())
                 .await;
         // Only resume on the first attempt
         current_resume_id = None;
@@ -140,9 +141,11 @@ pub async fn execute_task(
                 println!("[worker] running review phase...");
                 let review_result = run_review_phase(
                     repo_path,
+                    task_id,
                     task_title,
                     &impl_output.summary.clone().unwrap_or_default(),
                     agent_preferences,
+                    app_handle.clone(),
                 )
                 .await;
 
@@ -277,6 +280,7 @@ async fn run_implement_phase(
     previous_feedback: &Option<String>,
     resume_session_id: Option<&str>,
     agent_preferences: Option<&str>,
+    app_handle: Option<tauri::AppHandle>,
 ) -> Result<ImplementOutput, String> {
     let prefs_section = match agent_preferences {
         Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Instructions\n{prefs}"),
@@ -349,7 +353,7 @@ When done, output ONLY this JSON (no markdown, no explanation):
     };
 
     println!("[worker:implement] invoking Claude CLI — prompt_len={}, resume={}", prompt.len(), resume_session_id.is_some());
-    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, resume_session_id).await?;
+    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, resume_session_id, app_handle, Some(task_id)).await?;
     println!(
         "[worker:implement] Claude CLI returned — success={}, exit={:?}, stdout_len={}, stderr_len={}",
         result.success, result.exit_code, result.stdout.len(), result.stderr.len()
@@ -375,9 +379,11 @@ When done, output ONLY this JSON (no markdown, no explanation):
 
 async fn run_review_phase(
     repo_path: &str,
+    task_id: &str,
     task_title: &str,
     implementation_summary: &str,
     agent_preferences: Option<&str>,
+    app_handle: Option<tauri::AppHandle>,
 ) -> Result<ReviewOutput, String> {
     let prefs_section = match agent_preferences {
         Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Instructions\n{prefs}"),
@@ -421,7 +427,7 @@ Output ONLY this JSON (no markdown, no explanation):
     );
 
     println!("[worker:review] invoking Claude CLI — prompt_len={}", prompt.len());
-    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, None).await?;
+    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, None, app_handle, Some(task_id)).await?;
     println!(
         "[worker:review] Claude CLI returned — success={}, exit={:?}, stdout_len={}, stderr_len={}",
         result.success, result.exit_code, result.stdout.len(), result.stderr.len()
