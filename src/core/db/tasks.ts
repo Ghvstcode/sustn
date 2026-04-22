@@ -30,6 +30,7 @@ interface TaskRow {
     files_involved: string | null;
     base_branch: string | null;
     branch_name: string | null;
+    worktree_path: string | null;
     commit_sha: string | null;
     session_id: string | null;
     linear_issue_id: string | null;
@@ -109,6 +110,7 @@ function rowToTask(row: TaskRow): Task {
         filesInvolved: parseFilesInvolved(row.files_involved),
         baseBranch: row.base_branch ?? undefined,
         branchName: row.branch_name ?? undefined,
+        worktreePath: row.worktree_path ?? undefined,
         commitSha: row.commit_sha ?? undefined,
         sessionId: row.session_id ?? undefined,
         linearIssueId: row.linear_issue_id ?? undefined,
@@ -268,6 +270,7 @@ export async function updateTask(
             | "category"
             | "baseBranch"
             | "branchName"
+            | "worktreePath"
             | "commitSha"
             | "sessionId"
             | "lastError"
@@ -328,6 +331,10 @@ export async function updateTask(
     if (fields.branchName !== undefined) {
         setClauses.push(`branch_name = $${paramIndex++}`);
         values.push(fields.branchName);
+    }
+    if (fields.worktreePath !== undefined) {
+        setClauses.push(`worktree_path = $${paramIndex++}`);
+        values.push(fields.worktreePath);
     }
     if (fields.commitSha !== undefined) {
         setClauses.push(`commit_sha = $${paramIndex++}`);
@@ -572,6 +579,63 @@ export async function createScannedTask(
         undefined,
         undefined,
         "Discovered by agent scan",
+    );
+
+    const rows = await db.select<TaskRow[]>(
+        "SELECT * FROM tasks WHERE id = $1",
+        [id],
+    );
+
+    return rowToTask(rows[0]);
+}
+
+/**
+ * Create a task from an imported PR.
+ * The task starts in "review" state with PR fields pre-populated.
+ */
+export async function createImportedTask(
+    repositoryId: string,
+    task: {
+        title: string;
+        description: string | undefined;
+        baseBranch: string;
+        branchName: string;
+        prUrl: string;
+        prNumber: number;
+    },
+    sortOrder: number,
+): Promise<Task> {
+    const db = await getDb();
+    const id = await invoke<string>("generate_task_id");
+
+    await db.execute(
+        `INSERT INTO tasks (id, repository_id, title, description, category, sort_order, source, state, base_branch, branch_name, pr_url, pr_number, pr_state)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+        [
+            id,
+            repositoryId,
+            task.title,
+            task.description ?? null,
+            "general",
+            sortOrder,
+            "imported",
+            "review",
+            task.baseBranch,
+            task.branchName,
+            task.prUrl,
+            task.prNumber,
+            "in_review",
+        ],
+    );
+
+    await recordEvent(
+        db,
+        id,
+        "created",
+        undefined,
+        undefined,
+        undefined,
+        "Imported from PR",
     );
 
     const rows = await db.select<TaskRow[]>(

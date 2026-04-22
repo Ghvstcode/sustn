@@ -149,13 +149,24 @@ pub fn get_weekly_usage() -> Result<(i64, String), String> {
 /// usage earlier in the week from falsely exhausting the budget for remaining days —
 /// the actual subscription resets on rolling windows, not as a rigid weekly lump sum.
 pub fn calculate_budget_status(config: &BudgetConfig) -> BudgetStatus {
+    calculate_budget_status_with_reservation(config, 0)
+}
+
+/// Calculate budget status accounting for tokens already reserved by
+/// in-flight tasks. Used to prevent over-commit when multiple tasks
+/// start concurrently.
+pub fn calculate_budget_status_with_reservation(
+    config: &BudgetConfig,
+    tokens_reserved: i64,
+) -> BudgetStatus {
     let (tokens_today, _) = get_today_usage().unwrap_or((0, "unavailable".to_string()));
     let (tokens_week, source) = get_weekly_usage().unwrap_or((0, "unavailable".to_string()));
 
     let daily_budget = config.weekly_token_budget / 7;
     let max_for_sustn = daily_budget * (config.max_usage_percent as i64) / 100;
     let reserve = daily_budget * (config.reserve_percent as i64) / 100;
-    let available = (max_for_sustn - tokens_today - reserve).max(0);
+    let available =
+        (max_for_sustn - tokens_today - reserve - tokens_reserved).max(0);
 
     BudgetStatus {
         weekly_token_budget: config.weekly_token_budget,

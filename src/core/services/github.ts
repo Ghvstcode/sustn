@@ -30,6 +30,15 @@ export interface GhPrComment {
     updated_at: string;
 }
 
+/** Issue-level comment on a PR (general discussion, not tied to a line). */
+export interface GhIssueComment {
+    id: number;
+    user: { login: string };
+    body: string;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface GhPrStatus {
     state: "open" | "closed" | "merged";
     merged: boolean;
@@ -76,6 +85,39 @@ async function ghApiPost<T>(
         throw new Error(`gh api POST failed: ${result.stderr}`);
     }
     return JSON.parse(result.stdout) as T;
+}
+
+// ── PR Metadata ────────────────────────────────────────────
+
+export interface GhPrMetadata {
+    title: string;
+    body: string;
+    headBranch: string;
+    baseBranch: string;
+    user: { login: string };
+    state: "open" | "closed";
+    merged: boolean;
+}
+
+export async function getPrMetadata(
+    repoPath: string,
+    owner: string,
+    repo: string,
+    prNumber: number,
+): Promise<GhPrMetadata> {
+    const raw = await ghApi<Record<string, unknown>>(
+        repoPath,
+        `repos/${owner}/${repo}/pulls/${prNumber}`,
+    );
+    return {
+        title: raw.title as string,
+        body: (raw.body as string) ?? "",
+        headBranch: (raw.head as { ref: string }).ref,
+        baseBranch: (raw.base as { ref: string }).ref,
+        user: { login: (raw.user as { login: string }).login },
+        state: raw.state as "open" | "closed",
+        merged: raw.merged as boolean,
+    };
 }
 
 // ── PR Status ───────────────────────────────────────────────
@@ -152,6 +194,57 @@ export async function postPrComment(
     );
 }
 
+// ── Issue-level Comments ────────────────────────────────────
+
+/**
+ * List issue-level comments on a PR (general conversation, not tied to a
+ * diff line). These come from the issues endpoint because PRs are issues
+ * on the GitHub data model.
+ */
+export async function listIssueComments(
+    repoPath: string,
+    owner: string,
+    repo: string,
+    prNumber: number,
+): Promise<GhIssueComment[]> {
+    return ghApi<GhIssueComment[]>(
+        repoPath,
+        `repos/${owner}/${repo}/issues/${prNumber}/comments`,
+    );
+}
+
+/**
+ * Marker appended to every bot-authored issue comment so we can identify
+ * and skip them on the next fetch, without having to resolve the gh
+ * user's login. More robust than login matching if auth is swapped.
+ */
+export const SUSTN_MARKER_PREFIX = "<!-- sustn:task=";
+
+export function sustnMarker(taskId: string): string {
+    return `${SUSTN_MARKER_PREFIX}${taskId} -->`;
+}
+
+export function bodyHasSustnMarker(body: string): boolean {
+    return body.includes(SUSTN_MARKER_PREFIX);
+}
+
+/**
+ * Post an issue comment on a PR with a trailing marker identifying it as
+ * authored by SUSTN for a given task. The marker is invisible in GitHub's
+ * rendered markdown but lets us dedup on fetch.
+ */
+export async function postPrCommentWithMarker(
+    repoPath: string,
+    owner: string,
+    repo: string,
+    prNumber: number,
+    taskId: string,
+    body: string,
+): Promise<{ id: number }> {
+    const stamped = `${body}\n\n${sustnMarker(taskId)}`;
+    return postPrComment(repoPath, owner, repo, prNumber, stamped);
+}
+
 // ── Re-request Review ───────────────────────────────────────
 
 export async function requestReview(
@@ -189,4 +282,75 @@ export async function getPrDiff(
         throw new Error(`Failed to get PR diff: ${result.stderr}`);
     }
     return result.stdout;
+}
+
+// ── Resolved Threads ──────────────────────────────────────
+
+/**
+ * Fetch the set of root comment IDs whose review thread has been
+ * marked as "Resolved" on GitHub.
+ *
+ * Uses the GraphQL API because the REST API does not expose
+ * thread resolution status.
+ */
+export async function getResolvedThreadCommentIds(
+    repoPath: string,
+    owner: string,
+    repo: string,
+    prNumber: number,
+): Promise<Set<number>> {
+    const query = `
+        query($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                    reviewThreads(first: 100) {
+                        nodes {
+                            isResolved
+                            comments(first: 1) {
+                                nodes { databaseId }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    `;
+
+    try {
+        const result = await ghApiPost<{
+            data?: {
+                repository?: {
+                    pullRequest?: {
+                        reviewThreads?: {
+                            nodes?: Array<{
+                                isResolved: boolean;
+                                comments: {
+                                    nodes: Array<{ databaseId: number }>;
+                                };
+                            }>;
+                        };
+                    };
+                };
+            };
+        }>(repoPath, "graphql", {
+            query,
+            variables: { owner, repo, number: prNumber },
+        });
+
+        const threads =
+            result.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+        const resolvedIds = new Set<number>();
+        for (const thread of threads) {
+            if (thread.isResolved) {
+                const rootComment = thread.comments.nodes[0];
+                if (rootComment) {
+                    resolvedIds.add(rootComment.databaseId);
+                }
+            }
+        }
+        return resolvedIds;
+    } catch (e) {
+        console.warn(`[github] failed to fetch resolved threads:`, e);
+        return new Set();
+    }
 }

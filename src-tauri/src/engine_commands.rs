@@ -22,10 +22,30 @@ pub async fn engine_get_budget(app: AppHandle) -> Result<budget::BudgetStatus, S
 #[tauri::command]
 pub async fn engine_scan_now(
     app: AppHandle,
+    state: State<'_, Arc<EngineState>>,
     repo_path: String,
     repository_id: String,
 ) -> Result<scanner::ScanResult, String> {
     println!("[engine] engine_scan_now invoked — repo_path={repo_path}, repository_id={repository_id}");
+
+    // Check concurrency — scans count against the same pool as tasks
+    {
+        let tasks = state.running_tasks.lock().await;
+        let scans = *state.active_scans.lock().await;
+        let limit = *state.concurrency_limit.read().await;
+        if tasks.len() + scans >= limit {
+            return Err(format!(
+                "Concurrency limit reached ({}/{} in flight)",
+                tasks.len() + scans, limit
+            ));
+        }
+    }
+
+    // Reserve a scan slot (increment active_scans)
+    {
+        let mut scans = state.active_scans.lock().await;
+        *scans += 1;
+    }
 
     // Emit scan-started event
     let _ = app.emit("agent:scan-started", serde_json::json!({
@@ -33,14 +53,26 @@ pub async fn engine_scan_now(
     }));
 
     // Read project-specific scan preferences
-    let app_data_dir_for_prefs = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+    let app_data_dir_for_prefs = match app.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            // Release scan slot on early error
+            let mut scans = state.active_scans.lock().await;
+            *scans = scans.saturating_sub(1);
+            return Err(format!("Failed to get app data dir: {e}"));
+        }
+    };
     let (_agent_prefs, scan_prefs) = db::read_project_preferences(&app_data_dir_for_prefs, &repository_id);
 
     // --- Pass 1: Quick scan (pre-read files, no tool use) ---
     let result = scanner::scan_repository(&repo_path, scan_prefs.as_deref()).await;
+
+    // Release the Pass-1 scan slot. (Pass 2, if spawned, will increment
+    // its own slot below.)
+    {
+        let mut scans = state.active_scans.lock().await;
+        *scans = scans.saturating_sub(1);
+    }
 
     // Emit pass 1 completed event
     let _ = app.emit("agent:scan-completed", serde_json::json!({
@@ -80,6 +112,12 @@ pub async fn engine_scan_now(
                 // Mark this repo as deep-scanning so engine_start_task can wait
                 engine_state_clone.deep_scanning_repos.lock().await.insert(repo_id_clone.clone());
 
+                // Count this scan against the concurrency limit
+                {
+                    let mut scans = engine_state_clone.active_scans.lock().await;
+                    *scans += 1;
+                }
+
                 let _ = app_clone.emit("agent:scan-deep-started", serde_json::json!({
                     "repositoryId": repo_id_clone,
                 }));
@@ -102,6 +140,8 @@ pub async fn engine_scan_now(
                                 "error": format!("Failed to get app data dir: {e}"),
                             }));
                             engine_state_clone.deep_scanning_repos.lock().await.remove(&repo_id_clone);
+                            let mut scans = engine_state_clone.active_scans.lock().await;
+                            *scans = scans.saturating_sub(1);
                             return;
                         }
                     };
@@ -144,6 +184,10 @@ pub async fn engine_scan_now(
 
                 // Clear deep-scanning flag so waiting tasks can proceed
                 engine_state_clone.deep_scanning_repos.lock().await.remove(&repo_id_clone);
+                {
+                    let mut scans = engine_state_clone.active_scans.lock().await;
+                    *scans = scans.saturating_sub(1);
+                }
                 println!("[engine] deep scan flag cleared for repository {repo_id_clone}");
             });
         } else {
@@ -209,44 +253,69 @@ pub async fn engine_start_task(
     }
 
     // Check budget before starting work (respects per-project ceiling override)
+    // Accounts for tokens already reserved by other in-flight tasks.
     {
         let app_data_dir = app
             .path()
             .app_data_dir()
             .map_err(|e| format!("Failed to get app data dir: {e}"))?;
         let mut config = db::read_budget_config(&app_data_dir);
-        // Apply per-project ceiling override (may be lower than global)
         let effective_ceiling = db::read_effective_ceiling_percent(&app_data_dir, &repository_id);
         if effective_ceiling < config.max_usage_percent {
             config.max_usage_percent = effective_ceiling;
         }
-        let status = budget::calculate_budget_status(&config);
+        let reserved = *state.tokens_reserved.lock().await;
+        let status =
+            budget::calculate_budget_status_with_reservation(&config, reserved);
         if status.budget_exhausted {
-            println!("[engine_start_task] BLOCKED — budget exhausted (available={}, ceiling={}%)", status.tokens_available_for_sustn, effective_ceiling);
+            println!("[engine_start_task] BLOCKED — budget exhausted (available={}, reserved={}, ceiling={}%)",
+                status.tokens_available_for_sustn, reserved, effective_ceiling);
             return Err("Budget exhausted — cannot start task".to_string());
         }
     }
 
-    // Check if a task is already running
+    // Check concurrency limit (includes in-flight scans)
     {
-        let current = state.current_task.lock().await;
-        if current.is_some() {
-            println!("[engine_start_task] BLOCKED — another task already in progress");
-            return Err("Another task is already in progress".to_string());
+        let tasks = state.running_tasks.lock().await;
+        let scans = *state.active_scans.lock().await;
+        let limit = *state.concurrency_limit.read().await;
+        let in_flight = tasks.len() + scans;
+        if in_flight >= limit {
+            println!(
+                "[engine_start_task] BLOCKED — at concurrency limit ({}/{}; {} tasks + {} scans)",
+                in_flight, limit, tasks.len(), scans
+            );
+            return Err(format!(
+                "Concurrency limit reached ({}/{} tasks running)",
+                in_flight, limit
+            ));
+        }
+        if tasks.contains_key(&task_id) {
+            return Err("This task is already running".to_string());
         }
     }
 
-    // Set current task
+    // Register task as running
     {
-        let mut current = state.current_task.lock().await;
-        *current = Some(CurrentTask {
-            task_id: task_id.clone(),
-            repository_id: repository_id.clone(),
-            phase: TaskPhase::Implementing,
-            started_at: chrono::Local::now().to_rfc3339(),
-        });
+        let mut tasks = state.running_tasks.lock().await;
+        tasks.insert(
+            task_id.clone(),
+            CurrentTask {
+                task_id: task_id.clone(),
+                repository_id: repository_id.clone(),
+                phase: TaskPhase::Implementing,
+                started_at: chrono::Local::now().to_rfc3339(),
+            },
+        );
     }
-    println!("[engine_start_task] current_task set — emitting agent:task-started");
+
+    // Reserve estimated tokens to prevent over-commit across parallel tasks
+    let reserved_tokens = budget::estimated_task_tokens(None);
+    {
+        let mut reserved = state.tokens_reserved.lock().await;
+        *reserved += reserved_tokens;
+    }
+    println!("[engine_start_task] task registered — reserved {reserved_tokens} tokens");
 
     // Emit task-started event
     let _ = app.emit("agent:task-started", serde_json::json!({
@@ -263,10 +332,31 @@ pub async fn engine_start_task(
         db::read_project_preferences(&app_data_dir, &repository_id)
     };
 
-    // Execute the task
+    // Create worktree for task isolation
+    let _ = engine::worktree::ensure_gitignore_entry(&repo_path);
+    let worktree_path = engine::worktree::create_worktree(
+        &repo_path,
+        &task_id,
+        &branch_name,
+        &base_branch,
+    )
+    .map_err(|e| {
+        // Remove task from running_tasks and release reservation on failure
+        let state_clone = state.inner().clone();
+        let tid = task_id.clone();
+        tokio::spawn(async move {
+            state_clone.running_tasks.lock().await.remove(&tid);
+            let mut reserved = state_clone.tokens_reserved.lock().await;
+            *reserved = (*reserved - reserved_tokens).max(0);
+        });
+        e
+    })?;
+    println!("[engine_start_task] worktree created at {worktree_path}");
+
+    // Execute the task in the worktree
     println!("[engine_start_task] calling worker::execute_task — max_retries=4");
     let result = worker::execute_task(
-        &repo_path,
+        &worktree_path,
         &task_id,
         &task_title,
         &task_description,
@@ -277,6 +367,7 @@ pub async fn engine_start_task(
         user_messages,
         resume_session_id,
         agent_prefs.as_deref(),
+        Some(app.clone()),
     )
     .await;
 
@@ -285,10 +376,14 @@ pub async fn engine_start_task(
         result.success, result.phase_reached, result.branch_name, result.commit_sha, result.error
     );
 
-    // Clear current task
+    // Remove task from running_tasks and release reservation
     {
-        let mut current = state.current_task.lock().await;
-        *current = None;
+        let mut tasks = state.running_tasks.lock().await;
+        tasks.remove(&task_id);
+    }
+    {
+        let mut reserved = state.tokens_reserved.lock().await;
+        *reserved = (*reserved - reserved_tokens).max(0);
     }
 
     // Emit completion event
@@ -313,17 +408,36 @@ pub async fn engine_start_task(
     Ok(result)
 }
 
+/// Update the maximum number of tasks that can run concurrently.
+/// Clamped to [1, 10] to prevent pathological values.
+#[tauri::command]
+pub async fn engine_set_concurrency_limit(
+    state: State<'_, Arc<EngineState>>,
+    limit: usize,
+) -> Result<(), String> {
+    let clamped = limit.clamp(1, 10);
+    *state.concurrency_limit.write().await = clamped;
+    println!("[engine] concurrency limit updated to {clamped}");
+    Ok(())
+}
+
 /// Get the current engine status.
 #[tauri::command]
 pub async fn engine_get_status(
     state: State<'_, Arc<EngineState>>,
 ) -> Result<EngineStatusResponse, String> {
     let running = *state.running.read().await;
-    let current_task = state.current_task.lock().await.clone();
+    let tasks = state.running_tasks.lock().await;
+    let running_tasks: Vec<CurrentTask> = tasks.values().cloned().collect();
+    // Keep current_task for backward compatibility — first running task
+    let current_task = running_tasks.first().cloned();
+    let limit = *state.concurrency_limit.read().await;
 
     Ok(EngineStatusResponse {
         running,
         current_task,
+        running_tasks,
+        concurrency_limit: limit,
     })
 }
 
@@ -514,6 +628,8 @@ Output ONLY a JSON array (one entry per task, same order) with no markdown forma
         Some(&context),
         None,
         None,
+        None,
+        None,
     )
     .await?;
 
@@ -631,6 +747,7 @@ pub async fn engine_address_review(
     review_comments: String,
     pr_description: String,
     resume_session_id: Option<String>,
+    pr_diff: Option<String>,
 ) -> Result<worker::WorkResult, String> {
     println!(
         "[engine_address_review] task_id={task_id}, branch={branch_name}, comments_len={}, resume={:?}",
@@ -651,7 +768,7 @@ pub async fn engine_address_review(
         return Err(format!("Environment issue: {}", issue.error));
     }
 
-    // Budget check
+    // Budget check with reservation tracking
     {
         let app_data_dir = app.path().app_data_dir()
             .map_err(|e| format!("Failed to get app data dir: {e}"))?;
@@ -660,27 +777,48 @@ pub async fn engine_address_review(
         if effective_ceiling < config.max_usage_percent {
             config.max_usage_percent = effective_ceiling;
         }
-        let status = budget::calculate_budget_status(&config);
+        let reserved = *state.tokens_reserved.lock().await;
+        let status =
+            budget::calculate_budget_status_with_reservation(&config, reserved);
         if status.budget_exhausted {
             return Err("Budget exhausted — cannot address review".to_string());
         }
     }
 
     {
-        let current = state.current_task.lock().await;
-        if current.is_some() {
-            return Err("Another task is already in progress".to_string());
+        let tasks = state.running_tasks.lock().await;
+        let scans = *state.active_scans.lock().await;
+        let limit = *state.concurrency_limit.read().await;
+        let in_flight = tasks.len() + scans;
+        if in_flight >= limit {
+            return Err(format!(
+                "Concurrency limit reached ({}/{} tasks running)",
+                in_flight, limit
+            ));
+        }
+        if tasks.contains_key(&task_id) {
+            return Err("This task is already running".to_string());
         }
     }
 
     {
-        let mut current = state.current_task.lock().await;
-        *current = Some(CurrentTask {
-            task_id: task_id.clone(),
-            repository_id: repository_id.clone(),
-            phase: TaskPhase::Implementing,
-            started_at: chrono::Local::now().to_rfc3339(),
-        });
+        let mut tasks = state.running_tasks.lock().await;
+        tasks.insert(
+            task_id.clone(),
+            CurrentTask {
+                task_id: task_id.clone(),
+                repository_id: repository_id.clone(),
+                phase: TaskPhase::Implementing,
+                started_at: chrono::Local::now().to_rfc3339(),
+            },
+        );
+    }
+
+    // Reserve estimated tokens for this review cycle
+    let reserved_tokens = budget::estimated_task_tokens(Some("low"));
+    {
+        let mut reserved = state.tokens_reserved.lock().await;
+        *reserved += reserved_tokens;
     }
 
     let _ = app.emit("agent:task-started", serde_json::json!({
@@ -699,37 +837,58 @@ pub async fn engine_address_review(
         _ => String::new(),
     };
 
+    // For imported PRs on the first cycle (no session), include the full diff
+    // so Claude understands the PR before addressing comments.
+    let pr_context_section = match (&resume_session_id, &pr_diff) {
+        (None, Some(diff)) => format!(
+            r#"
+
+## Full PR Diff (you are taking over this PR — study it carefully)
+```diff
+{diff}
+```
+"#
+        ),
+        _ => String::new(),
+    };
+
     let prompt = format!(
         r#"IMPORTANT: You are running as an automated background agent in non-interactive mode. Commit your changes directly — do NOT ask for permission.
 
-A human reviewer has left comments on the PR you created. You need to handle EVERY comment — either by making code changes or by drafting a reply.
+A human reviewer has left feedback on a PR. You need to handle EVERY item — either by making code changes or by drafting a reply.
 
 ## PR Description
 {pr_description}
+{pr_context_section}
+## Review Items
+Each item below has a COMMENT_ID and a KIND tag that you MUST echo back in your response.
 
-## Review Comments
-Each comment below has a COMMENT_ID number that you MUST include in your response.
+KIND values and what they mean:
+- `inline` — a review comment anchored to a specific diff line. Usually narrow and code-specific.
+- `issue` — a general PR comment not tied to a line. May be a question, a request, or plain chat. Not all of them need a code change — sometimes a plain reply is correct.
+- `review_summary` — the free-text body a reviewer wrote when submitting a review. Often contains overall asks (e.g. "please split this into two PRs", "looks good but rename X") that complement the per-line comments in the same review. Treat these as first-class feedback.
 
 {review_comments}
 {prefs_section}
 
 ## Instructions
-For EACH review comment above:
+For EACH item above:
 
-1. **If it requires code changes** (bug fix, refactor, improvement, the reviewer is questioning an approach and they're right): make the changes, commit with trailer SUSTN-Task: {task_id}, and draft a reply explaining what you changed.
+1. **If it requires code changes** (bug fix, refactor, improvement, a legitimate concern about the approach): make the changes, commit with trailer SUSTN-Task: {task_id}, and draft a reply explaining what you changed.
 
 2. **If it's a question about your reasoning** (why did you do X?): explain your reasoning clearly — you have context from when you wrote this code.
 
-3. **If it's praise or acknowledgment** (looks good, nice, etc.): draft a brief thanks.
+3. **If it's conversational** (praise, a check-in, a "what do you think about Y?"): draft a brief, appropriate reply. No code change needed.
 
-CRITICAL: You MUST return a reply for EVERY comment. Use the exact COMMENT_ID number from each comment header above.
+CRITICAL: You MUST return a reply for EVERY item. Use the exact COMMENT_ID number and KIND value from the header above each item.
 
 After making any code changes and committing, output ONLY this JSON (no markdown):
 {{
   "replies": [
     {{
       "comment_id": 1234567890,
-      "reply": "Your response to this specific comment",
+      "kind": "inline",
+      "reply": "Your response to this specific item",
       "made_code_changes": true
     }}
   ],
@@ -737,30 +896,45 @@ After making any code changes and committing, output ONLY this JSON (no markdown
   "files_modified": ["list", "of", "files"]
 }}
 
-The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in each comment above. Do NOT use null."#
+The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag. The kind MUST be one of `inline`, `issue`, or `review_summary` matching the [KIND: ...] tag. Do NOT use null for either field."#
     );
 
-    // Ensure we're on the right branch
-    if engine::git::branch_exists(&repo_path, &branch_name) {
-        engine::git::checkout_branch(&repo_path, &branch_name);
-    } else {
-        engine::git::create_branch_from(&repo_path, &branch_name, &base_branch);
-    }
+    // Create/reuse worktree for task isolation
+    let _ = engine::worktree::ensure_gitignore_entry(&repo_path);
+    let worktree_path = engine::worktree::create_worktree(
+        &repo_path,
+        &task_id,
+        &branch_name,
+        &base_branch,
+    )
+    .map_err(|e| {
+        let state_clone = state.inner().clone();
+        let tid = task_id.clone();
+        tokio::spawn(async move {
+            state_clone.running_tasks.lock().await.remove(&tid);
+            let mut reserved = state_clone.tokens_reserved.lock().await;
+            *reserved = (*reserved - reserved_tokens).max(0);
+        });
+        e
+    })?;
+    println!("[engine_address_review] using worktree at {worktree_path}");
 
     // Call Claude CLI directly with our exact prompt (not through worker,
     // which overrides the prompt with its own resume template)
     let cli_result = engine::invoke_claude_cli(
-        &repo_path,
+        &worktree_path,
         &prompt,
         1800, // 30 min timeout
         None,
         None,
         resume_session_id.as_deref(),
+        Some(app.clone()),
+        Some(&task_id),
     )
     .await;
 
     // Get commit SHA after Claude ran
-    let sha_result = engine::git::latest_commit_sha(&repo_path);
+    let sha_result = engine::git::latest_commit_sha(&worktree_path);
     let commit_sha = if sha_result.success { Some(sha_result.output) } else { None };
     let session_id = cli_result.as_ref().ok().and_then(|r| r.session_id.clone());
 
@@ -795,8 +969,12 @@ The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in eac
     };
 
     {
-        let mut current = state.current_task.lock().await;
-        *current = None;
+        let mut tasks = state.running_tasks.lock().await;
+        tasks.remove(&task_id);
+    }
+    {
+        let mut reserved = state.tokens_reserved.lock().await;
+        *reserved = (*reserved - reserved_tokens).max(0);
     }
 
     if success {
@@ -817,9 +995,60 @@ The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in eac
     Ok(result)
 }
 
+/// Remove a task's worktree (cleanup after completion/dismissal).
+#[tauri::command]
+pub async fn engine_cleanup_worktree(
+    repo_path: String,
+    task_id: String,
+) -> Result<(), String> {
+    engine::worktree::remove_worktree(&repo_path, &task_id)
+}
+
+/// Clone a repository (non-blocking, no credential prompts).
+#[tauri::command]
+pub async fn engine_clone_repo(
+    url: String,
+    destination: String,
+) -> Result<engine::git::GitResult, String> {
+    // Run on blocking thread since clone can take a while
+    tokio::task::spawn_blocking(move || {
+        Ok(engine::git::clone_repo(&url, &destination))
+    })
+    .await
+    .map_err(|e| format!("Clone task failed: {}", e))?
+}
+
+/// Fetch a specific branch from origin (with optional PR number for fork fallback).
+#[tauri::command]
+pub async fn engine_fetch_branch(
+    repo_path: String,
+    branch_name: String,
+    pr_number: Option<u32>,
+) -> Result<engine::git::GitResult, String> {
+    Ok(engine::git::fetch_branch_with_pr(&repo_path, &branch_name, pr_number))
+}
+
+/// Get the remote URL for origin.
+#[tauri::command]
+pub async fn engine_get_remote_url(
+    repo_path: String,
+) -> Result<String, String> {
+    let result = engine::git::get_remote_url(&repo_path);
+    if result.success {
+        Ok(result.output)
+    } else {
+        Err(result.error.unwrap_or_else(|| "Failed to get remote URL".to_string()))
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineStatusResponse {
     pub running: bool,
+    /// First running task, kept for backward compatibility.
     pub current_task: Option<CurrentTask>,
+    /// All currently running tasks.
+    pub running_tasks: Vec<CurrentTask>,
+    /// Maximum number of tasks that can run concurrently.
+    pub concurrency_limit: usize,
 }

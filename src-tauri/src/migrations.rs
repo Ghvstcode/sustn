@@ -364,5 +364,69 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        // Migration 18: worktree path for task isolation
+        Migration {
+            version: 18,
+            description: "add worktree_path to tasks",
+            sql: r#"
+                ALTER TABLE tasks ADD COLUMN worktree_path TEXT;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        // Migration 19: persisted agent streaming events per task
+        Migration {
+            version: 19,
+            description: "add task_agent_events table for streamed agent output",
+            sql: r#"
+                CREATE TABLE IF NOT EXISTS task_agent_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    event_type TEXT,
+                    blocks_json TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_task_agent_events_task
+                    ON task_agent_events(task_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        // Migration 20: seed default concurrency limit
+        Migration {
+            version: 20,
+            description: "seed concurrency_limit global setting",
+            sql: r#"
+                INSERT OR IGNORE INTO global_settings (key, value) VALUES
+                    ('concurrency_limit', '5');
+            "#,
+            kind: MigrationKind::Up,
+        },
+        // Migration 21: per-repo scan_enabled flag (default true for existing repos,
+        // imported repos will set this to false)
+        Migration {
+            version: 21,
+            description: "add scan_enabled to agent_config",
+            sql: r#"
+                ALTER TABLE agent_config ADD COLUMN scan_enabled INTEGER NOT NULL DEFAULT 1;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        // Migration 22: track comment source kind so issue-level and
+        // review-summary comments live alongside inline review comments
+        // without colliding on github_comment_id (different server-side
+        // ID namespaces can reuse the same integer).
+        Migration {
+            version: 22,
+            description: "add kind to pr_comments and seed rollout cutoff",
+            sql: r#"
+                ALTER TABLE pr_comments ADD COLUMN kind TEXT NOT NULL DEFAULT 'inline';
+                DROP INDEX IF EXISTS idx_pr_comments_github_id;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_comments_kind_github_id
+                    ON pr_comments(kind, github_comment_id);
+                INSERT OR IGNORE INTO global_settings (key, value) VALUES
+                    ('pr_comments_rollout_cutoff', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

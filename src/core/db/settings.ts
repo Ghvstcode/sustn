@@ -53,6 +53,7 @@ const KEY_MAP: Record<string, keyof GlobalSettings> = {
     linear_enabled: "linearEnabled",
     pr_lifecycle_enabled: "prLifecycleEnabled",
     max_review_cycles: "maxReviewCycles",
+    concurrency_limit: "concurrencyLimit",
 };
 
 const REVERSE_KEY_MAP: Record<string, string> = Object.fromEntries(
@@ -75,6 +76,7 @@ function parseValue(camelKey: string, raw: string): unknown {
         return raw ? (raw.split(",") as ScheduleDay[]) : [];
     if (camelKey === "budgetCeilingPercent") return parseInt(raw, 10);
     if (camelKey === "maxReviewCycles") return parseInt(raw, 10);
+    if (camelKey === "concurrencyLimit") return parseInt(raw, 10);
     return raw;
 }
 
@@ -109,6 +111,7 @@ const DEFAULTS: GlobalSettings = {
     linearEnabled: false,
     prLifecycleEnabled: true,
     maxReviewCycles: 5,
+    concurrencyLimit: 5,
 };
 
 export async function getGlobalSettings(): Promise<GlobalSettings> {

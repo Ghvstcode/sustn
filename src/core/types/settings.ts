@@ -38,6 +38,9 @@ export interface GlobalSettings {
     // PR Lifecycle
     prLifecycleEnabled: boolean;
     maxReviewCycles: number;
+
+    // Parallel execution
+    concurrencyLimit: number;
 }
 
 export interface ProjectOverrides {

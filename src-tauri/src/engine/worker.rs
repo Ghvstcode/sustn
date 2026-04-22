@@ -76,90 +76,12 @@ pub async fn execute_task(
     user_messages: Option<String>,
     resume_session_id: Option<String>,
     agent_preferences: Option<&str>,
+    app_handle: Option<tauri::AppHandle>,
 ) -> WorkResult {
     println!("[worker] execute_task START — task_id={task_id}, title={task_title}, base_branch={base_branch}, branch={branch_name}, files={files_involved:?}, has_user_messages={}, resume_session={:?}", user_messages.is_some(), resume_session_id);
 
-    // Save original branch so we can return to it
-    let original_branch = git::current_branch(repo_path);
-    if !original_branch.success {
-        return WorkResult {
-            success: false,
-            phase_reached: TaskPhase::Planning,
-            branch_name: None,
-            commit_sha: None,
-            files_modified: vec![],
-            summary: None,
-            error: Some(format!(
-                "Could not determine current branch: {}",
-                original_branch.error.unwrap_or_else(|| "unknown error".to_string())
-            )),
-            review_warnings: None,
-            session_id: None,
-        };
-    }
-    let original_branch_name = original_branch.output.clone();
-
-    // Auto-stash if working tree is dirty (safety net for queue transitions)
-    if !git::is_clean(repo_path) {
-        println!("[worker] dirty working tree — auto-stashing");
-        let stash = git::stash(repo_path);
-        if !stash.success {
-            return WorkResult {
-                success: false,
-                phase_reached: TaskPhase::Planning,
-                branch_name: None,
-                commit_sha: None,
-                files_modified: vec![],
-                summary: None,
-                error: Some(
-                    "Working tree is dirty and auto-stash failed. Commit or stash changes manually.".to_string(),
-                ),
-                review_warnings: None,
-                session_id: None,
-            };
-        }
-    }
-
-    // Create task branch from the specified base branch
-    if git::branch_exists(repo_path, branch_name) {
-        // Branch already exists — checkout it
-        let checkout = git::checkout_branch(repo_path, branch_name);
-        if !checkout.success {
-            return WorkResult {
-                success: false,
-                phase_reached: TaskPhase::Planning,
-                branch_name: Some(branch_name.to_string()),
-                commit_sha: None,
-                files_modified: vec![],
-                summary: None,
-                error: Some(format!(
-                    "Failed to checkout branch: {}",
-                    checkout.error.unwrap_or_else(|| "unknown error".to_string())
-                )),
-                review_warnings: None,
-                session_id: None,
-            };
-        }
-    } else {
-        let create = git::create_branch_from(repo_path, branch_name, base_branch);
-        if !create.success {
-            return WorkResult {
-                success: false,
-                phase_reached: TaskPhase::Planning,
-                branch_name: Some(branch_name.to_string()),
-                commit_sha: None,
-                files_modified: vec![],
-                summary: None,
-                error: Some(format!(
-                    "Failed to create branch from {}: {}",
-                    base_branch,
-                    create.error.unwrap_or_else(|| "unknown error".to_string())
-                )),
-                review_warnings: None,
-                session_id: None,
-            };
-        }
-    }
+    // repo_path is a worktree with the task branch already checked out.
+    // No need to save/restore branches or stash — the worktree is isolated.
 
     // Run the implement phase (we skip separate plan phase for now —
     // Claude Code is capable enough to plan inline during implementation)
@@ -176,7 +98,7 @@ pub async fn execute_task(
 
         println!("[worker] running implement phase...");
         let implement_result =
-            run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback, current_resume_id.as_deref(), agent_preferences)
+            run_implement_phase(repo_path, task_id, task_title, task_description, files_involved, &last_feedback, current_resume_id.as_deref(), agent_preferences, app_handle.clone())
                 .await;
         // Only resume on the first attempt
         current_resume_id = None;
@@ -200,7 +122,6 @@ pub async fn execute_task(
                 // fail early instead of running a pointless review.
                 if !git::has_commits_ahead(repo_path, base_branch) {
                     println!("[worker] NO COMMITS on branch — Claude likely did not commit");
-                    let _ = git::checkout_branch(repo_path, &original_branch_name);
                     return WorkResult {
                         success: false,
                         phase_reached: TaskPhase::Implementing,
@@ -220,9 +141,11 @@ pub async fn execute_task(
                 println!("[worker] running review phase...");
                 let review_result = run_review_phase(
                     repo_path,
+                    task_id,
                     task_title,
                     &impl_output.summary.clone().unwrap_or_default(),
                     agent_preferences,
+                    app_handle.clone(),
                 )
                 .await;
 
@@ -240,10 +163,9 @@ pub async fn execute_task(
 
                 match review_result {
                     Ok(review) if review.passed.unwrap_or(false) => {
-                        // Success — get commit SHA and return to original branch
+                        // Success — get commit SHA
                         let sha = git::latest_commit_sha(repo_path);
-                        println!("[worker] REVIEW PASSED — sha={:?}, returning to branch {original_branch_name}", sha.output);
-                        let _ = git::checkout_branch(repo_path, &original_branch_name);
+                        println!("[worker] REVIEW PASSED — sha={:?}", sha.output);
 
                         return WorkResult {
                             success: true,
@@ -277,7 +199,6 @@ pub async fn execute_task(
                             if !has_critical {
                                 let sha = git::latest_commit_sha(repo_path);
                                 println!("[worker] SOFT-PASS — no critical issues after {attempt} attempts, accepting with warnings");
-                                let _ = git::checkout_branch(repo_path, &original_branch_name);
                                 return WorkResult {
                                     success: true,
                                     phase_reached: TaskPhase::Reviewing,
@@ -298,8 +219,6 @@ pub async fn execute_task(
                             }
 
                             // Genuine critical issues that couldn't be fixed
-                            let _ =
-                                git::checkout_branch(repo_path, &original_branch_name);
                             return WorkResult {
                                 success: false,
                                 phase_reached: TaskPhase::Reviewing,
@@ -321,7 +240,6 @@ pub async fn execute_task(
                         last_feedback = review.feedback.clone();
                     }
                     Err(e) => {
-                        let _ = git::checkout_branch(repo_path, &original_branch_name);
                         return WorkResult {
                             success: false,
                             phase_reached: TaskPhase::Reviewing,
@@ -337,7 +255,6 @@ pub async fn execute_task(
                 }
             }
             Err(e) => {
-                let _ = git::checkout_branch(repo_path, &original_branch_name);
                 return WorkResult {
                     success: false,
                     phase_reached: TaskPhase::Implementing,
@@ -363,6 +280,7 @@ async fn run_implement_phase(
     previous_feedback: &Option<String>,
     resume_session_id: Option<&str>,
     agent_preferences: Option<&str>,
+    app_handle: Option<tauri::AppHandle>,
 ) -> Result<ImplementOutput, String> {
     let prefs_section = match agent_preferences {
         Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Instructions\n{prefs}"),
@@ -435,7 +353,7 @@ When done, output ONLY this JSON (no markdown, no explanation):
     };
 
     println!("[worker:implement] invoking Claude CLI — prompt_len={}, resume={}", prompt.len(), resume_session_id.is_some());
-    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, resume_session_id).await?;
+    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, resume_session_id, app_handle, Some(task_id)).await?;
     println!(
         "[worker:implement] Claude CLI returned — success={}, exit={:?}, stdout_len={}, stderr_len={}",
         result.success, result.exit_code, result.stdout.len(), result.stderr.len()
@@ -461,9 +379,11 @@ When done, output ONLY this JSON (no markdown, no explanation):
 
 async fn run_review_phase(
     repo_path: &str,
+    task_id: &str,
     task_title: &str,
     implementation_summary: &str,
     agent_preferences: Option<&str>,
+    app_handle: Option<tauri::AppHandle>,
 ) -> Result<ReviewOutput, String> {
     let prefs_section = match agent_preferences {
         Some(prefs) if !prefs.trim().is_empty() => format!("\n\n## Project-Specific Instructions\n{prefs}"),
@@ -507,7 +427,7 @@ Output ONLY this JSON (no markdown, no explanation):
     );
 
     println!("[worker:review] invoking Claude CLI — prompt_len={}", prompt.len());
-    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, None).await?;
+    let result = invoke_claude_cli(repo_path, &prompt, WORK_TIMEOUT_SECS, None, None, None, app_handle, Some(task_id)).await?;
     println!(
         "[worker:review] Claude CLI returned — success={}, exit={:?}, stdout_len={}, stderr_len={}",
         result.success, result.exit_code, result.stdout.len(), result.stderr.len()

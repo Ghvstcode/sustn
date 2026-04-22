@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import type { CSSProperties } from "react";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Link } from "lucide-react";
 import { useAppStore } from "@core/store/app-store";
 import { useScanNow } from "@core/api/useEngine";
 import { useGlobalSettings } from "@core/api/useSettings";
+import { useImportPr } from "@core/api/useImportPr";
 import { ProjectList } from "./ProjectList";
 import { SidebarFooter } from "./SidebarFooter";
 import { AddProjectDialog } from "./AddProjectDialog";
@@ -17,8 +18,19 @@ export function Sidebar({ style }: SidebarProps) {
     const setSelectedRepository = useAppStore((s) => s.setSelectedRepository);
     const scanNow = useScanNow();
     const { data: globalSettings } = useGlobalSettings();
+    const importPr = useImportPr();
     const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
     const [search, setSearch] = useState("");
+    const [prUrl, setPrUrl] = useState("");
+    const prInputRef = useRef<HTMLInputElement>(null);
+
+    function handleImportPr() {
+        const url = prUrl.trim();
+        if (!url) return;
+        // Clear input immediately — progress shows in a toast
+        setPrUrl("");
+        importPr.mutate(url);
+    }
 
     return (
         <aside
@@ -70,6 +82,28 @@ export function Sidebar({ style }: SidebarProps) {
                 >
                     <Plus className="h-3.5 w-3.5" />
                 </button>
+            </div>
+
+            {/* Import PR */}
+            <div className="px-3 pb-2">
+                <div className="relative">
+                    <Link className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-sidebar-foreground/40" />
+                    <input
+                        ref={prInputRef}
+                        type="text"
+                        placeholder="Paste a PR link..."
+                        value={prUrl}
+                        onChange={(e) => setPrUrl(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") handleImportPr();
+                            if (e.key === "Escape") {
+                                setPrUrl("");
+                                prInputRef.current?.blur();
+                            }
+                        }}
+                        className="w-full rounded-md border border-sidebar-border bg-transparent py-1.5 pl-7 pr-2 text-[12px] text-sidebar-foreground placeholder:text-sidebar-foreground/35 focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                </div>
             </div>
 
             {/* Project list */}
