@@ -411,10 +411,11 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
                     commentId,
                     body,
                 );
-                // Update local DB
+                // Update local DB — this UI path only replies to inline
+                // review comments, so the kind is always "inline".
                 const { setCommentReply } =
                     await import("@core/db/pr-lifecycle");
-                await setCommentReply(commentId, body);
+                await setCommentReply("inline", commentId, body);
                 // Invalidate to refresh
                 void queryClient.invalidateQueries({
                     queryKey: ["pr-comments", taskId],

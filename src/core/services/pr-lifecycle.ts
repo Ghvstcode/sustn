@@ -18,27 +18,53 @@ import {
     listComments,
     markCommentAddressed,
     setCommentReply,
+    getPrCommentsRolloutCutoff,
 } from "@core/db/pr-lifecycle";
 import {
     parseOwnerRepo,
     listPrReviews,
     listPrComments,
+    listIssueComments,
     getPrStatus,
     replyToComment,
+    postPrCommentWithMarker,
+    bodyHasSustnMarker,
     requestReview,
 } from "@core/services/github";
 import { listRepositories } from "@core/db/repositories";
 import { getGlobalSettings, getProjectOverrides } from "@core/db/settings";
 import type { WorkResult } from "@core/types/agent";
-import type { PrState, Task } from "@core/types/task";
-import type { GhPrComment, GhPrReview } from "@core/services/github";
+import type { PrState, PrCommentKind, Task } from "@core/types/task";
+import type {
+    GhPrComment,
+    GhPrReview,
+    GhIssueComment,
+} from "@core/services/github";
 
 // ── Claude Response Parsing ─────────────────────────────────
 
 interface ClaudeReviewReply {
     comment_id: number;
+    /**
+     * Which source the comment came from. Claude echoes this back from the
+     * [KIND: ...] tag we put in each comment header so we know which
+     * GitHub endpoint to post the reply to.
+     */
+    kind?: PrCommentKind;
     reply: string;
     made_code_changes: boolean;
+}
+
+/**
+ * Sentinel stored in `addressed_in_commit` for rows synthesized from PR
+ * history that predates the non-inline-comment rollout. These rows are
+ * never sent to Claude — they exist only to dedup future fetches.
+ */
+const PRE_ROLLOUT_SENTINEL = "pre-rollout";
+
+function isAfterCutoff(ts: string, cutoff: string | undefined): boolean {
+    if (!cutoff) return true;
+    return new Date(ts).getTime() > new Date(cutoff).getTime();
 }
 
 // ── Core Lifecycle ──────────────────────────────────────────
@@ -147,7 +173,13 @@ export async function processTaskPr(
                 new Date(a.submitted_at).getTime(),
         )[0];
 
-    // 4. Always sync comments regardless of review state
+    // 4. Always sync comments regardless of review state.
+    //    We gather three sources:
+    //      - inline review comments (diff-line-anchored)
+    //      - issue-level PR comments (general conversation)
+    //      - review summary bodies (the free text on a review submission)
+    //    All three land in pr_comments tagged by `kind` so downstream
+    //    processing is uniform.
     console.log(`[pr-lifecycle] fetching comments for PR #${prNumber}`);
     let ghComments: GhPrComment[];
     try {
@@ -157,7 +189,24 @@ export async function processTaskPr(
         ghComments = [];
     }
 
-    // Filter out our own replies
+    let ghIssueComments: GhIssueComment[];
+    try {
+        ghIssueComments = await listIssueComments(
+            repoPath,
+            owner,
+            repo,
+            prNumber,
+        );
+    } catch (e) {
+        console.error(`[pr-lifecycle] failed to fetch issue comments:`, e);
+        ghIssueComments = [];
+    }
+
+    const rolloutCutoff = await getPrCommentsRolloutCutoff();
+
+    // Filter out our own replies (inline comments we've already posted —
+    // matched by body text because the inline replies API doesn't let us
+    // inject markers).
     const existingDbComments = await listComments(task.id);
     const ourReplyBodies = new Set(
         existingDbComments
@@ -176,13 +225,17 @@ export async function processTaskPr(
     });
 
     console.log(
-        `[pr-lifecycle] PR #${prNumber} — ${ghComments.length} total comment(s), ${externalComments.length} external`,
+        `[pr-lifecycle] PR #${prNumber} — ${ghComments.length} inline (${externalComments.length} external), ${ghIssueComments.length} issue comment(s)`,
     );
 
-    // Sync external comments to DB
+    // Sync inline review comments
     for (const comment of externalComments) {
+        const preAddressed = !isAfterCutoff(comment.created_at, rolloutCutoff)
+            ? PRE_ROLLOUT_SENTINEL
+            : undefined;
         await upsertComment(task.id, {
             githubCommentId: comment.id,
+            kind: "inline",
             inReplyToId: comment.in_reply_to_id ?? undefined,
             reviewer: comment.user.login,
             body: comment.body,
@@ -190,6 +243,46 @@ export async function processTaskPr(
             line: comment.line ?? comment.original_line ?? undefined,
             side: comment.side ?? undefined,
             commitId: comment.commit_id ?? undefined,
+            preAddressedSentinel: preAddressed,
+        });
+    }
+
+    // Sync issue-level PR comments. Skip any that carry our marker —
+    // those are comments this agent posted previously. Everything else
+    // is external content we need to address.
+    for (const issueComment of ghIssueComments) {
+        if (bodyHasSustnMarker(issueComment.body)) continue;
+        const preAddressed = !isAfterCutoff(
+            issueComment.created_at,
+            rolloutCutoff,
+        )
+            ? PRE_ROLLOUT_SENTINEL
+            : undefined;
+        await upsertComment(task.id, {
+            githubCommentId: issueComment.id,
+            kind: "issue",
+            reviewer: issueComment.user.login,
+            body: issueComment.body,
+            preAddressedSentinel: preAddressed,
+        });
+    }
+
+    // Synthesize a review_summary row for every review that carries a
+    // non-empty body. github_comment_id uses the review's id; because
+    // pr_comments is keyed by (kind, github_comment_id), this won't
+    // collide with pull-comment ids that happen to share the integer.
+    for (const review of reviews) {
+        const body = review.body?.trim();
+        if (!body) continue;
+        const preAddressed = !isAfterCutoff(review.submitted_at, rolloutCutoff)
+            ? PRE_ROLLOUT_SENTINEL
+            : undefined;
+        await upsertComment(task.id, {
+            githubCommentId: review.id,
+            kind: "review_summary",
+            reviewer: review.user.login,
+            body: `[${review.state}] ${body}`,
+            preAddressedSentinel: preAddressed,
         });
     }
 
@@ -221,7 +314,11 @@ export async function processTaskPr(
             !c.ourReply &&
             !c.addressedInCommit &&
             !c.inReplyToId &&
-            !resolvedIds.has(c.githubCommentId),
+            // resolvedIds comes from the inline review-threads GraphQL
+            // query, so it's only meaningful for inline rows. Issue and
+            // review_summary rows share an integer ID namespace with
+            // inline rows — don't drop them on a coincidental collision.
+            (c.kind !== "inline" || !resolvedIds.has(c.githubCommentId)),
     );
 
     if (task.prState === "opened") {
@@ -325,10 +422,17 @@ export async function processTaskPr(
 
     const reviewContext = unprocessedComments
         .map((c) => {
-            const location = c.path
-                ? `File: ${c.path}${c.line ? `:${c.line}` : ""}`
-                : "General";
-            return `[COMMENT_ID: ${c.githubCommentId}] [${location}] @${c.reviewer}:\n${c.body}`;
+            let location: string;
+            if (c.kind === "inline") {
+                location = c.path
+                    ? `File: ${c.path}${c.line ? `:${c.line}` : ""}`
+                    : "Inline comment";
+            } else if (c.kind === "issue") {
+                location = "General PR Comment";
+            } else {
+                location = "Review Summary";
+            }
+            return `[COMMENT_ID: ${c.githubCommentId}] [KIND: ${c.kind}] [${location}] @${c.reviewer}:\n${c.body}`;
         })
         .join("\n\n---\n\n");
 
@@ -386,13 +490,15 @@ export async function processTaskPr(
                 );
             }
 
-            // Fix null comment_ids — if counts match, zip them
+            // Fix null comment_ids — if counts match, zip them (and fill
+            // kind from the corresponding source row so routing still works)
             for (let i = 0; i < replies.length; i++) {
                 if (!replies[i].comment_id && i < unprocessedComments.length) {
                     replies[i].comment_id =
                         unprocessedComments[i].githubCommentId;
+                    replies[i].kind ??= unprocessedComments[i].kind;
                     console.log(
-                        `[pr-lifecycle] fixed null comment_id → ${replies[i].comment_id} (positional match)`,
+                        `[pr-lifecycle] fixed null comment_id → ${replies[i].comment_id} (positional match, kind=${replies[i].kind})`,
                     );
                 }
             }
@@ -401,38 +507,79 @@ export async function processTaskPr(
                 `[pr-lifecycle] Claude returned ${replies.length} reply(ies), push=${pushResult.success}`,
                 replies.map((r) => ({
                     id: r.comment_id,
+                    kind: r.kind,
                     code: r.made_code_changes,
                     reply: r.reply?.slice(0, 60),
                 })),
             );
 
-            // Post replies to GitHub and update DB
+            // Post replies to GitHub and update DB, routing by kind so
+            // each comment gets a reply on the correct endpoint.
             for (const r of replies) {
                 if (!r.reply || !r.comment_id) continue;
-                try {
-                    await replyToComment(
-                        repoPath,
-                        owner,
-                        repo,
-                        prNumber,
-                        r.comment_id,
-                        r.reply,
+
+                // Resolve the source row: ID alone is not unique across
+                // kinds, so prefer Claude's echoed kind and fall back to
+                // ID-based lookup (with a warning if it's ambiguous).
+                const matches = unprocessedComments.filter(
+                    (c) => c.githubCommentId === r.comment_id,
+                );
+                const sourceComment = r.kind
+                    ? matches.find((c) => c.kind === r.kind)
+                    : matches[0];
+                if (!sourceComment) {
+                    console.warn(
+                        `[pr-lifecycle] reply for unknown comment_id=${r.comment_id} kind=${r.kind ?? "?"}, skipping`,
                     );
-                    await setCommentReply(r.comment_id, r.reply);
+                    continue;
+                }
+                if (matches.length > 1 && !r.kind) {
+                    console.warn(
+                        `[pr-lifecycle] ambiguous reply for comment_id=${r.comment_id} (${matches.length} matches); Claude did not echo kind`,
+                    );
+                }
+                const kind = sourceComment.kind;
+
+                try {
+                    if (kind === "inline") {
+                        await replyToComment(
+                            repoPath,
+                            owner,
+                            repo,
+                            prNumber,
+                            r.comment_id,
+                            r.reply,
+                        );
+                    } else {
+                        // Issue-level and review-summary replies both go
+                        // to the issues endpoint as new top-level PR
+                        // comments, stamped with a marker so we skip
+                        // them on the next fetch.
+                        await postPrCommentWithMarker(
+                            repoPath,
+                            owner,
+                            repo,
+                            prNumber,
+                            task.id,
+                            r.reply,
+                        );
+                    }
+                    await setCommentReply(kind, r.comment_id, r.reply);
 
                     if (r.made_code_changes && result.commitSha) {
                         await markCommentAddressed(
+                            kind,
                             r.comment_id,
                             result.commitSha,
                         );
                     }
 
                     console.log(
-                        `[pr-lifecycle] replied to comment ${r.comment_id} (code_changes=${r.made_code_changes})`,
+                        `[pr-lifecycle] replied to ${kind} comment ${r.comment_id} (code_changes=${r.made_code_changes})`,
                     );
                 } catch (e) {
                     console.error(
-                        `[pr-lifecycle] failed to post reply for comment ${r.comment_id}:`,
+                        `[pr-lifecycle] failed to post reply for ${kind} comment ${r.comment_id}:`,
                         e,
                     );
                 }
@@ -442,10 +589,13 @@ export async function processTaskPr(
             if (pushResult.success && result.commitSha) {
                 for (const c of unprocessedComments) {
                     const hasReply = replies.some(
-                        (r) => r.comment_id === c.githubCommentId,
+                        (r) =>
+                            r.comment_id === c.githubCommentId &&
+                            (r.kind ?? c.kind) === c.kind,
                     );
                     if (!hasReply) {
                         await markCommentAddressed(
+                            c.kind,
                             c.githubCommentId,
                             result.commitSha,
                         );

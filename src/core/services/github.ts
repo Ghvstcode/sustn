@@ -30,6 +30,15 @@ export interface GhPrComment {
     updated_at: string;
 }
 
+/** Issue-level comment on a PR (general discussion, not tied to a line). */
+export interface GhIssueComment {
+    id: number;
+    user: { login: string };
+    body: string;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface GhPrStatus {
     state: "open" | "closed" | "merged";
     merged: boolean;
@@ -183,6 +192,57 @@ export async function postPrComment(
         `repos/${owner}/${repo}/issues/${prNumber}/comments`,
         { body },
     );
+}
+
+// ── Issue-level Comments ────────────────────────────────────
+
+/**
+ * List issue-level comments on a PR (general conversation, not tied to a
+ * diff line). These come from the issues endpoint because PRs are issues
+ * on the GitHub data model.
+ */
+export async function listIssueComments(
+    repoPath: string,
+    owner: string,
+    repo: string,
+    prNumber: number,
+): Promise<GhIssueComment[]> {
+    return ghApi<GhIssueComment[]>(
+        repoPath,
+        `repos/${owner}/${repo}/issues/${prNumber}/comments`,
+    );
+}
+
+/**
+ * Marker appended to every bot-authored issue comment so we can identify
+ * and skip them on the next fetch, without having to resolve the gh
+ * user's login. More robust than login matching if auth is swapped.
+ */
+export const SUSTN_MARKER_PREFIX = "<!-- sustn:task=";
+
+export function sustnMarker(taskId: string): string {
+    return `${SUSTN_MARKER_PREFIX}${taskId} -->`;
+}
+
+export function bodyHasSustnMarker(body: string): boolean {
+    return body.includes(SUSTN_MARKER_PREFIX);
+}
+
+/**
+ * Post an issue comment on a PR with a trailing marker identifying it as
+ * authored by SUSTN for a given task. The marker is invisible in GitHub's
+ * rendered markdown but lets us dedup on fetch.
+ */
+export async function postPrCommentWithMarker(
+    repoPath: string,
+    owner: string,
+    repo: string,
+    prNumber: number,
+    taskId: string,
+    body: string,
+): Promise<{ id: number }> {
+    const stamped = `${body}\n\n${sustnMarker(taskId)}`;
+    return postPrComment(repoPath, owner, repo, prNumber, stamped);
 }
 
 // ── Re-request Review ───────────────────────────────────────

@@ -6,7 +6,7 @@
 import Database from "@tauri-apps/plugin-sql";
 import { invoke } from "@tauri-apps/api/core";
 import { config } from "@core/config";
-import type { PrReview, PrComment } from "@core/types/task";
+import type { PrReview, PrComment, PrCommentKind } from "@core/types/task";
 
 async function getDb() {
     return await Database.load(config.dbUrl);
@@ -114,6 +114,7 @@ interface PrCommentRow {
     id: string;
     task_id: string;
     github_comment_id: number;
+    kind: string;
     in_reply_to_id: number | null;
     reviewer: string;
     body: string;
@@ -133,6 +134,7 @@ function rowToComment(row: PrCommentRow): PrComment {
         id: row.id,
         taskId: row.task_id,
         githubCommentId: row.github_comment_id,
+        kind: (row.kind as PrCommentKind) ?? "inline",
         inReplyToId: row.in_reply_to_id ?? undefined,
         reviewer: row.reviewer,
         body: row.body,
@@ -153,6 +155,7 @@ export async function upsertComment(
     taskId: string,
     comment: {
         githubCommentId: number;
+        kind: PrCommentKind;
         inReplyToId?: number;
         reviewer: string;
         body: string;
@@ -160,39 +163,47 @@ export async function upsertComment(
         line?: number;
         side?: string;
         commitId?: string;
+        /**
+         * When the source comment predates the non-inline-comment rollout,
+         * the service passes a commit-sha-like sentinel so the row is
+         * inserted as already-addressed and never re-sent to Claude.
+         */
+        preAddressedSentinel?: string;
     },
 ): Promise<PrComment> {
     const db = await getDb();
 
-    // Check if already exists — update body if so
+    // Check if already exists — match on (kind, github_comment_id) because
+    // review / pull-comment / issue-comment IDs share an integer space but
+    // come from different server-side tables and can collide.
     const existing = await db.select<PrCommentRow[]>(
-        "SELECT * FROM pr_comments WHERE github_comment_id = $1",
-        [comment.githubCommentId],
+        "SELECT * FROM pr_comments WHERE kind = $1 AND github_comment_id = $2",
+        [comment.kind, comment.githubCommentId],
     );
 
     if (existing.length > 0) {
-        // Update body in case it changed
         if (existing[0].body !== comment.body) {
             await db.execute(
-                "UPDATE pr_comments SET body = $1, updated_at = CURRENT_TIMESTAMP WHERE github_comment_id = $2",
-                [comment.body, comment.githubCommentId],
+                "UPDATE pr_comments SET body = $1, updated_at = CURRENT_TIMESTAMP WHERE kind = $2 AND github_comment_id = $3",
+                [comment.body, comment.kind, comment.githubCommentId],
             );
         }
         const rows = await db.select<PrCommentRow[]>(
-            "SELECT * FROM pr_comments WHERE github_comment_id = $1",
-            [comment.githubCommentId],
+            "SELECT * FROM pr_comments WHERE kind = $1 AND github_comment_id = $2",
+            [comment.kind, comment.githubCommentId],
         );
         return rowToComment(rows[0]);
     }
 
     const id = await invoke<string>("generate_task_id");
     await db.execute(
-        `INSERT INTO pr_comments (id, task_id, github_comment_id, in_reply_to_id, reviewer, body, path, line, side, commit_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        `INSERT INTO pr_comments (id, task_id, github_comment_id, kind, in_reply_to_id, reviewer, body, path, line, side, commit_id, addressed_in_commit, classification)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
             id,
             taskId,
             comment.githubCommentId,
+            comment.kind,
             comment.inReplyToId ?? null,
             comment.reviewer,
             comment.body,
@@ -200,6 +211,8 @@ export async function upsertComment(
             comment.line ?? null,
             comment.side ?? null,
             comment.commitId ?? null,
+            comment.preAddressedSentinel ?? null,
+            comment.preAddressedSentinel ? "resolved" : null,
         ],
     );
 
@@ -245,25 +258,42 @@ export async function updateCommentClassification(
 }
 
 export async function markCommentAddressed(
+    kind: PrCommentKind,
     githubCommentId: number,
     commitSha: string,
 ): Promise<void> {
     const db = await getDb();
     await db.execute(
-        "UPDATE pr_comments SET addressed_in_commit = $1, classification = 'resolved', updated_at = CURRENT_TIMESTAMP WHERE github_comment_id = $2",
-        [commitSha, githubCommentId],
+        "UPDATE pr_comments SET addressed_in_commit = $1, classification = 'resolved', updated_at = CURRENT_TIMESTAMP WHERE kind = $2 AND github_comment_id = $3",
+        [commitSha, kind, githubCommentId],
     );
 }
 
 export async function setCommentReply(
+    kind: PrCommentKind,
     githubCommentId: number,
     reply: string,
 ): Promise<void> {
     const db = await getDb();
     await db.execute(
-        "UPDATE pr_comments SET our_reply = $1, updated_at = CURRENT_TIMESTAMP WHERE github_comment_id = $2",
-        [reply, githubCommentId],
+        "UPDATE pr_comments SET our_reply = $1, updated_at = CURRENT_TIMESTAMP WHERE kind = $2 AND github_comment_id = $3",
+        [reply, kind, githubCommentId],
     );
+}
+
+/**
+ * Read the rollout cutoff timestamp stamped at migration 22 install time.
+ * Comments/reviews with source timestamp <= cutoff are treated as
+ * pre-existing history and not fed back to Claude.
+ */
+export async function getPrCommentsRolloutCutoff(): Promise<
+    string | undefined
+> {
+    const db = await getDb();
+    const rows = await db.select<{ value: string }[]>(
+        "SELECT value FROM global_settings WHERE key = 'pr_comments_rollout_cutoff'",
+    );
+    return rows[0]?.value;
 }
 
 /** Get all tasks that have an active PR lifecycle (for polling) */

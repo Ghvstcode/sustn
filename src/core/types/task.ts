@@ -76,10 +76,13 @@ export interface PrReview {
     createdAt: string;
 }
 
+export type PrCommentKind = "inline" | "issue" | "review_summary";
+
 export interface PrComment {
     id: string;
     taskId: string;
     githubCommentId: number;
+    kind: PrCommentKind;
     inReplyToId: number | undefined;
     reviewer: string;
     body: string;

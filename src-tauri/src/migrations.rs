@@ -411,5 +411,22 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        // Migration 22: track comment source kind so issue-level and
+        // review-summary comments live alongside inline review comments
+        // without colliding on github_comment_id (different server-side
+        // ID namespaces can reuse the same integer).
+        Migration {
+            version: 22,
+            description: "add kind to pr_comments and seed rollout cutoff",
+            sql: r#"
+                ALTER TABLE pr_comments ADD COLUMN kind TEXT NOT NULL DEFAULT 'inline';
+                DROP INDEX IF EXISTS idx_pr_comments_github_id;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_comments_kind_github_id
+                    ON pr_comments(kind, github_comment_id);
+                INSERT OR IGNORE INTO global_settings (key, value) VALUES
+                    ('pr_comments_rollout_cutoff', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

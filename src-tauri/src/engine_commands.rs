@@ -855,34 +855,40 @@ pub async fn engine_address_review(
     let prompt = format!(
         r#"IMPORTANT: You are running as an automated background agent in non-interactive mode. Commit your changes directly — do NOT ask for permission.
 
-A human reviewer has left comments on a PR. You need to handle EVERY comment — either by making code changes or by drafting a reply.
+A human reviewer has left feedback on a PR. You need to handle EVERY item — either by making code changes or by drafting a reply.
 
 ## PR Description
 {pr_description}
 {pr_context_section}
-## Review Comments
-Each comment below has a COMMENT_ID number that you MUST include in your response.
+## Review Items
+Each item below has a COMMENT_ID and a KIND tag that you MUST echo back in your response.
+
+KIND values and what they mean:
+- `inline` — a review comment anchored to a specific diff line. Usually narrow and code-specific.
+- `issue` — a general PR comment not tied to a line. May be a question, a request, or plain chat. Not all of them need a code change — sometimes a plain reply is correct.
+- `review_summary` — the free-text body a reviewer wrote when submitting a review. Often contains overall asks (e.g. "please split this into two PRs", "looks good but rename X") that complement the per-line comments in the same review. Treat these as first-class feedback.
 
 {review_comments}
 {prefs_section}
 
 ## Instructions
-For EACH review comment above:
+For EACH item above:
 
-1. **If it requires code changes** (bug fix, refactor, improvement, the reviewer is questioning an approach and they're right): make the changes, commit with trailer SUSTN-Task: {task_id}, and draft a reply explaining what you changed.
+1. **If it requires code changes** (bug fix, refactor, improvement, a legitimate concern about the approach): make the changes, commit with trailer SUSTN-Task: {task_id}, and draft a reply explaining what you changed.
 
 2. **If it's a question about your reasoning** (why did you do X?): explain your reasoning clearly — you have context from when you wrote this code.
 
-3. **If it's praise or acknowledgment** (looks good, nice, etc.): draft a brief thanks.
+3. **If it's conversational** (praise, a check-in, a "what do you think about Y?"): draft a brief, appropriate reply. No code change needed.
 
-CRITICAL: You MUST return a reply for EVERY comment. Use the exact COMMENT_ID number from each comment header above.
+CRITICAL: You MUST return a reply for EVERY item. Use the exact COMMENT_ID number and KIND value from the header above each item.
 
 After making any code changes and committing, output ONLY this JSON (no markdown):
 {{
   "replies": [
     {{
       "comment_id": 1234567890,
-      "reply": "Your response to this specific comment",
+      "kind": "inline",
+      "reply": "Your response to this specific item",
       "made_code_changes": true
     }}
   ],
@@ -890,7 +896,7 @@ After making any code changes and committing, output ONLY this JSON (no markdown
   "files_modified": ["list", "of", "files"]
 }}
 
-The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in each comment above. Do NOT use null."#
+The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag. The kind MUST be one of `inline`, `issue`, or `review_summary` matching the [KIND: ...] tag. Do NOT use null for either field."#
     );
 
     // Create/reuse worktree for task isolation
