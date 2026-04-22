@@ -11,6 +11,8 @@ export interface AgentConfig {
     lastScanAt: string | undefined;
     lastWorkAt: string | undefined;
     priority: number;
+    /** Whether the repo participates in task discovery via scans. */
+    scanEnabled: boolean;
 }
 
 export interface BudgetConfig {
@@ -42,7 +44,12 @@ export interface CurrentTask {
 
 export interface EngineStatus {
     running: boolean;
+    /** First running task, kept for backward compatibility. */
     currentTask: CurrentTask | undefined;
+    /** All currently running tasks. */
+    runningTasks: CurrentTask[];
+    /** Maximum number of tasks that can run concurrently. */
+    concurrencyLimit: number;
 }
 
 export interface ContentBlock {

@@ -35,8 +35,9 @@ export function TaskStatusBanner({ taskId }: TaskStatusBannerProps) {
         };
     }, [taskId]);
 
-    const isWorking = status?.currentTask?.taskId === taskId;
-    const phase = status?.currentTask?.phase;
+    const runningTask = status?.runningTasks?.find((t) => t.taskId === taskId);
+    const isWorking = runningTask !== undefined;
+    const phase = runningTask?.phase;
 
     // Clear scan-waiting state once the engine picks up the task
     useEffect(() => {

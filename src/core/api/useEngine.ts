@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -98,6 +98,7 @@ export function useUpdateAgentConfig() {
             scheduleWindowEnd?: string;
             scanIntervalMinutes?: number;
             priority?: number;
+            scanEnabled?: boolean;
         }) => updateAgentConfig(repositoryId, fields),
         onSuccess: (config) => {
             metrics.track("settings_changed", { setting: "agent_config" });
@@ -209,15 +210,17 @@ export function useDeepScanListener(repositoryId: string | undefined) {
                     queryKey: ["tasks", repositoryId],
                 });
 
-                // If a task is actively running, re-invalidate its individual
-                // query so the TaskDetailView stays in sync after the list refetch.
+                // Re-invalidate any running task's individual query so the
+                // TaskDetailView stays in sync after the list refetch.
                 const status = queryClient.getQueryData<EngineStatus>([
                     "engine-status",
                 ]);
-                if (status?.currentTask?.repositoryId === repositoryId) {
-                    void queryClient.invalidateQueries({
-                        queryKey: ["task", status.currentTask.taskId],
-                    });
+                for (const task of status?.runningTasks ?? []) {
+                    if (task.repositoryId === repositoryId) {
+                        void queryClient.invalidateQueries({
+                            queryKey: ["task", task.taskId],
+                        });
+                    }
                 }
 
                 // Notify about new tasks found
@@ -622,7 +625,10 @@ export function useStartTask() {
             handleTaskResult(result, variables, queryClient),
         onError: (error, variables) => {
             const msg = error instanceof Error ? error.message : String(error);
-            if (msg.includes("Another task is already in progress")) {
+            if (
+                msg.includes("Concurrency limit reached") ||
+                msg.includes("Another task is already in progress")
+            ) {
                 // Race condition: engine busy but stale status didn't show it.
                 // Queue the task instead of failing it.
                 useQueueStore.getState().enqueue(variables);
@@ -662,11 +668,25 @@ export function useStartTask() {
  */
 export function useQueueProcessor() {
     const queryClient = useQueryClient();
-    const processingRef = useRef(false);
 
     useEffect(() => {
         async function processNext() {
-            if (processingRef.current) return;
+            // Check concurrency capacity — can we run another task?
+            try {
+                const engineStatus =
+                    await invoke<EngineStatus>("engine_get_status");
+                const running = engineStatus.runningTasks?.length ?? 0;
+                const limit = engineStatus.concurrencyLimit ?? 1;
+                if (running >= limit) {
+                    console.log(
+                        `[queue] at concurrency limit (${running}/${limit}) — waiting`,
+                    );
+                    return;
+                }
+            } catch (e) {
+                console.error("[queue] status check failed:", e);
+                return;
+            }
 
             // Check budget before dequeuing
             try {
@@ -682,7 +702,6 @@ export function useQueueProcessor() {
             const next = useQueueStore.getState().dequeue();
             if (!next) return;
 
-            processingRef.current = true;
             console.log(
                 "[queue] starting next task:",
                 next.taskId,
@@ -716,7 +735,10 @@ export function useQueueProcessor() {
             } catch (error) {
                 const msg =
                     error instanceof Error ? error.message : String(error);
-                if (msg.includes("Another task is already in progress")) {
+                if (
+                    msg.includes("Concurrency limit reached") ||
+                    msg.includes("Another task is already in progress")
+                ) {
                     // Engine still busy — put task back and wait for completion event
                     useQueueStore.getState().enqueue(next);
                     await dbUpdateTask(next.taskId, {
@@ -732,7 +754,6 @@ export function useQueueProcessor() {
                     await handleTaskError(error, next, queryClient);
                 }
             } finally {
-                processingRef.current = false;
                 if (!requeued) {
                     // Chain: check for more queued tasks
                     void processNext();
@@ -754,17 +775,10 @@ export function useQueueProcessor() {
             }),
         );
 
-        // Also process when a task is enqueued while engine is idle
+        // Also process when a task is enqueued and a slot is available
         const unsub = useQueueStore.subscribe((state, prevState) => {
             if (state.queue.length > prevState.queue.length) {
-                // Only start if the engine is actually idle
-                void invoke<EngineStatus>("engine_get_status")
-                    .then((status) => {
-                        if (!status.currentTask) {
-                            void processNext();
-                        }
-                    })
-                    .catch(() => {});
+                void processNext();
             }
         });
 
@@ -1009,6 +1023,20 @@ export function useStartupRecovery() {
                 });
             }
         });
+
+        // Sync persisted concurrency limit to the Rust engine state
+        void getGlobalSettings().then((settings) => {
+            if (typeof settings.concurrencyLimit === "number") {
+                void invoke("engine_set_concurrency_limit", {
+                    limit: settings.concurrencyLimit,
+                }).catch((e) => {
+                    console.warn(
+                        "[startup] failed to sync concurrency limit:",
+                        e,
+                    );
+                });
+            }
+        });
     }, [queryClient]);
 }
 
@@ -1042,6 +1070,9 @@ async function runStartupScans(queryClient: ReturnType<typeof useQueryClient>) {
 
         for (const repo of repos) {
             const config = await getAgentConfig(repo.id);
+
+            // Skip if scan-on-discovery is disabled for this repo
+            if (config.scanEnabled === false) continue;
 
             // Only auto-scan repos that have NEVER been scanned
             if (config.lastScanAt) continue;

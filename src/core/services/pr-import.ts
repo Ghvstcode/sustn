@@ -9,7 +9,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { parseOwnerRepo, getPrMetadata } from "@core/services/github";
 import { listRepositories, addRepository } from "@core/db/repositories";
 import { createImportedTask, listTasks } from "@core/db/tasks";
-import { getAgentConfig, updateLastScanAt } from "@core/db/agent-config";
+import {
+    getAgentConfig,
+    updateAgentConfig,
+    updateLastScanAt,
+} from "@core/db/agent-config";
 import type { Task } from "@core/types/task";
 
 export type ImportProgress = (step: string) => void;
@@ -94,9 +98,12 @@ export async function importPr(
     );
     console.log(`[pr-import] task created: ${task.id}`);
 
-    // Prevent auto-scanning — focus on addressing the PR first
+    // Imported repos shouldn't auto-scan for tasks — the user came here to
+    // manage an existing PR, not to start a scan-driven backlog. Disable
+    // scanning permanently for this repo; user can re-enable in project settings.
     try {
         await getAgentConfig(repository.id);
+        await updateAgentConfig(repository.id, { scanEnabled: false });
         await updateLastScanAt(repository.id);
     } catch {
         // Non-critical

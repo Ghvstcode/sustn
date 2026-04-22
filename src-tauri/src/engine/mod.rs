@@ -8,32 +8,46 @@ pub mod worker;
 pub mod worktree;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
+
+/// Default number of tasks that can run concurrently.
+pub const DEFAULT_CONCURRENCY_LIMIT: usize = 5;
 
 /// Global engine state shared across Tauri commands and the background scheduler.
 pub struct EngineState {
     /// Whether the engine scheduler loop is running.
     pub running: RwLock<bool>,
-    /// The currently executing task (if any). Only one task runs at a time.
-    pub current_task: Mutex<Option<CurrentTask>>,
+    /// Currently executing tasks, keyed by task_id.
+    pub running_tasks: Mutex<HashMap<String, CurrentTask>>,
     /// Handle to cancel the scheduler loop.
     pub cancel_token: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     /// Repository IDs that currently have a deep scan in progress.
     /// Task execution waits for the scan to finish before starting,
     /// preventing concurrent Claude CLI instances in the same repo.
     pub deep_scanning_repos: Mutex<HashSet<String>>,
+    /// Maximum number of tasks that can run concurrently.
+    pub concurrency_limit: RwLock<usize>,
+    /// Total tokens reserved by in-flight tasks (prevents over-commit
+    /// when multiple tasks start near-simultaneously).
+    pub tokens_reserved: Mutex<i64>,
+    /// Number of scans currently running. Counted against the concurrency
+    /// limit so scans and tasks don't over-subscribe Claude CLI.
+    pub active_scans: Mutex<usize>,
 }
 
 impl EngineState {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             running: RwLock::new(false),
-            current_task: Mutex::new(None),
+            running_tasks: Mutex::new(HashMap::new()),
             cancel_token: Mutex::new(None),
             deep_scanning_repos: Mutex::new(HashSet::new()),
+            concurrency_limit: RwLock::new(DEFAULT_CONCURRENCY_LIMIT),
+            tokens_reserved: Mutex::new(0),
+            active_scans: Mutex::new(0),
         })
     }
 }

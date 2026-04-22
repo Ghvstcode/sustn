@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import {
     getGlobalSettings,
     updateGlobalSetting,
@@ -24,18 +25,36 @@ export function useUpdateGlobalSetting() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: ({
+        mutationFn: async ({
             key,
             value,
         }: {
             key: keyof GlobalSettings;
             value: unknown;
-        }) => updateGlobalSetting(key, value),
+        }) => {
+            await updateGlobalSetting(key, value);
+            // Propagate runtime-sensitive settings to the Rust engine
+            if (key === "concurrencyLimit" && typeof value === "number") {
+                try {
+                    await invoke("engine_set_concurrency_limit", {
+                        limit: value,
+                    });
+                } catch (e) {
+                    console.warn(
+                        "[useSettings] failed to sync concurrency limit:",
+                        e,
+                    );
+                }
+            }
+        },
         onSuccess: (_data, variables) => {
             metrics.track("settings_changed", { setting: variables.key });
             savedToast();
             void queryClient.invalidateQueries({
                 queryKey: ["global-settings"],
+            });
+            void queryClient.invalidateQueries({
+                queryKey: ["engine-status"],
             });
         },
     });

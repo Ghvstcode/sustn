@@ -556,6 +556,31 @@ export function ProjectSection({
                     </div>
                 </div>
 
+                {/* Scan for tasks */}
+                <div className="flex items-start justify-between gap-8 border-b border-border py-5">
+                    <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground">
+                            Scan for tasks
+                        </p>
+                        <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">
+                            Let the agent analyze this repo and suggest
+                            improvements. Turn off for projects where you only
+                            want to handle imported PRs.
+                        </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-3">
+                        <Switch
+                            checked={agentConfig?.scanEnabled !== false}
+                            onCheckedChange={(checked) =>
+                                updateAgentConfig({
+                                    repositoryId,
+                                    scanEnabled: checked,
+                                })
+                            }
+                        />
+                    </div>
+                </div>
+
                 {/* PR auto-reply */}
                 <div className="flex items-start justify-between gap-8 py-5">
                     <div className="flex-1 min-w-0">

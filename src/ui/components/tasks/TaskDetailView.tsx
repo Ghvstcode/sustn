@@ -597,8 +597,10 @@ export function TaskDetailView({ taskId }: TaskDetailViewProps) {
             resumeSessionId,
         };
 
-        // If another task is running, queue this one instead
-        if (engineStatus?.currentTask) {
+        // If at concurrency capacity, queue this one instead
+        const runningCount = engineStatus?.runningTasks?.length ?? 0;
+        const limit = engineStatus?.concurrencyLimit ?? 1;
+        if (runningCount >= limit) {
             enqueue(params);
             queuedToast();
             return;

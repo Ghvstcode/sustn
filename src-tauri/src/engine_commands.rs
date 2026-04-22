@@ -22,10 +22,30 @@ pub async fn engine_get_budget(app: AppHandle) -> Result<budget::BudgetStatus, S
 #[tauri::command]
 pub async fn engine_scan_now(
     app: AppHandle,
+    state: State<'_, Arc<EngineState>>,
     repo_path: String,
     repository_id: String,
 ) -> Result<scanner::ScanResult, String> {
     println!("[engine] engine_scan_now invoked — repo_path={repo_path}, repository_id={repository_id}");
+
+    // Check concurrency — scans count against the same pool as tasks
+    {
+        let tasks = state.running_tasks.lock().await;
+        let scans = *state.active_scans.lock().await;
+        let limit = *state.concurrency_limit.read().await;
+        if tasks.len() + scans >= limit {
+            return Err(format!(
+                "Concurrency limit reached ({}/{} in flight)",
+                tasks.len() + scans, limit
+            ));
+        }
+    }
+
+    // Reserve a scan slot (increment active_scans)
+    {
+        let mut scans = state.active_scans.lock().await;
+        *scans += 1;
+    }
 
     // Emit scan-started event
     let _ = app.emit("agent:scan-started", serde_json::json!({
@@ -33,14 +53,26 @@ pub async fn engine_scan_now(
     }));
 
     // Read project-specific scan preferences
-    let app_data_dir_for_prefs = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+    let app_data_dir_for_prefs = match app.path().app_data_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            // Release scan slot on early error
+            let mut scans = state.active_scans.lock().await;
+            *scans = scans.saturating_sub(1);
+            return Err(format!("Failed to get app data dir: {e}"));
+        }
+    };
     let (_agent_prefs, scan_prefs) = db::read_project_preferences(&app_data_dir_for_prefs, &repository_id);
 
     // --- Pass 1: Quick scan (pre-read files, no tool use) ---
     let result = scanner::scan_repository(&repo_path, scan_prefs.as_deref()).await;
+
+    // Release the Pass-1 scan slot. (Pass 2, if spawned, will increment
+    // its own slot below.)
+    {
+        let mut scans = state.active_scans.lock().await;
+        *scans = scans.saturating_sub(1);
+    }
 
     // Emit pass 1 completed event
     let _ = app.emit("agent:scan-completed", serde_json::json!({
@@ -80,6 +112,12 @@ pub async fn engine_scan_now(
                 // Mark this repo as deep-scanning so engine_start_task can wait
                 engine_state_clone.deep_scanning_repos.lock().await.insert(repo_id_clone.clone());
 
+                // Count this scan against the concurrency limit
+                {
+                    let mut scans = engine_state_clone.active_scans.lock().await;
+                    *scans += 1;
+                }
+
                 let _ = app_clone.emit("agent:scan-deep-started", serde_json::json!({
                     "repositoryId": repo_id_clone,
                 }));
@@ -102,6 +140,8 @@ pub async fn engine_scan_now(
                                 "error": format!("Failed to get app data dir: {e}"),
                             }));
                             engine_state_clone.deep_scanning_repos.lock().await.remove(&repo_id_clone);
+                            let mut scans = engine_state_clone.active_scans.lock().await;
+                            *scans = scans.saturating_sub(1);
                             return;
                         }
                     };
@@ -144,6 +184,10 @@ pub async fn engine_scan_now(
 
                 // Clear deep-scanning flag so waiting tasks can proceed
                 engine_state_clone.deep_scanning_repos.lock().await.remove(&repo_id_clone);
+                {
+                    let mut scans = engine_state_clone.active_scans.lock().await;
+                    *scans = scans.saturating_sub(1);
+                }
                 println!("[engine] deep scan flag cleared for repository {repo_id_clone}");
             });
         } else {
@@ -209,44 +253,69 @@ pub async fn engine_start_task(
     }
 
     // Check budget before starting work (respects per-project ceiling override)
+    // Accounts for tokens already reserved by other in-flight tasks.
     {
         let app_data_dir = app
             .path()
             .app_data_dir()
             .map_err(|e| format!("Failed to get app data dir: {e}"))?;
         let mut config = db::read_budget_config(&app_data_dir);
-        // Apply per-project ceiling override (may be lower than global)
         let effective_ceiling = db::read_effective_ceiling_percent(&app_data_dir, &repository_id);
         if effective_ceiling < config.max_usage_percent {
             config.max_usage_percent = effective_ceiling;
         }
-        let status = budget::calculate_budget_status(&config);
+        let reserved = *state.tokens_reserved.lock().await;
+        let status =
+            budget::calculate_budget_status_with_reservation(&config, reserved);
         if status.budget_exhausted {
-            println!("[engine_start_task] BLOCKED — budget exhausted (available={}, ceiling={}%)", status.tokens_available_for_sustn, effective_ceiling);
+            println!("[engine_start_task] BLOCKED — budget exhausted (available={}, reserved={}, ceiling={}%)",
+                status.tokens_available_for_sustn, reserved, effective_ceiling);
             return Err("Budget exhausted — cannot start task".to_string());
         }
     }
 
-    // Check if a task is already running
+    // Check concurrency limit (includes in-flight scans)
     {
-        let current = state.current_task.lock().await;
-        if current.is_some() {
-            println!("[engine_start_task] BLOCKED — another task already in progress");
-            return Err("Another task is already in progress".to_string());
+        let tasks = state.running_tasks.lock().await;
+        let scans = *state.active_scans.lock().await;
+        let limit = *state.concurrency_limit.read().await;
+        let in_flight = tasks.len() + scans;
+        if in_flight >= limit {
+            println!(
+                "[engine_start_task] BLOCKED — at concurrency limit ({}/{}; {} tasks + {} scans)",
+                in_flight, limit, tasks.len(), scans
+            );
+            return Err(format!(
+                "Concurrency limit reached ({}/{} tasks running)",
+                in_flight, limit
+            ));
+        }
+        if tasks.contains_key(&task_id) {
+            return Err("This task is already running".to_string());
         }
     }
 
-    // Set current task
+    // Register task as running
     {
-        let mut current = state.current_task.lock().await;
-        *current = Some(CurrentTask {
-            task_id: task_id.clone(),
-            repository_id: repository_id.clone(),
-            phase: TaskPhase::Implementing,
-            started_at: chrono::Local::now().to_rfc3339(),
-        });
+        let mut tasks = state.running_tasks.lock().await;
+        tasks.insert(
+            task_id.clone(),
+            CurrentTask {
+                task_id: task_id.clone(),
+                repository_id: repository_id.clone(),
+                phase: TaskPhase::Implementing,
+                started_at: chrono::Local::now().to_rfc3339(),
+            },
+        );
     }
-    println!("[engine_start_task] current_task set — emitting agent:task-started");
+
+    // Reserve estimated tokens to prevent over-commit across parallel tasks
+    let reserved_tokens = budget::estimated_task_tokens(None);
+    {
+        let mut reserved = state.tokens_reserved.lock().await;
+        *reserved += reserved_tokens;
+    }
+    println!("[engine_start_task] task registered — reserved {reserved_tokens} tokens");
 
     // Emit task-started event
     let _ = app.emit("agent:task-started", serde_json::json!({
@@ -272,10 +341,13 @@ pub async fn engine_start_task(
         &base_branch,
     )
     .map_err(|e| {
-        // Clear current_task on worktree creation failure
+        // Remove task from running_tasks and release reservation on failure
         let state_clone = state.inner().clone();
+        let tid = task_id.clone();
         tokio::spawn(async move {
-            *state_clone.current_task.lock().await = None;
+            state_clone.running_tasks.lock().await.remove(&tid);
+            let mut reserved = state_clone.tokens_reserved.lock().await;
+            *reserved = (*reserved - reserved_tokens).max(0);
         });
         e
     })?;
@@ -304,10 +376,14 @@ pub async fn engine_start_task(
         result.success, result.phase_reached, result.branch_name, result.commit_sha, result.error
     );
 
-    // Clear current task
+    // Remove task from running_tasks and release reservation
     {
-        let mut current = state.current_task.lock().await;
-        *current = None;
+        let mut tasks = state.running_tasks.lock().await;
+        tasks.remove(&task_id);
+    }
+    {
+        let mut reserved = state.tokens_reserved.lock().await;
+        *reserved = (*reserved - reserved_tokens).max(0);
     }
 
     // Emit completion event
@@ -332,17 +408,36 @@ pub async fn engine_start_task(
     Ok(result)
 }
 
+/// Update the maximum number of tasks that can run concurrently.
+/// Clamped to [1, 10] to prevent pathological values.
+#[tauri::command]
+pub async fn engine_set_concurrency_limit(
+    state: State<'_, Arc<EngineState>>,
+    limit: usize,
+) -> Result<(), String> {
+    let clamped = limit.clamp(1, 10);
+    *state.concurrency_limit.write().await = clamped;
+    println!("[engine] concurrency limit updated to {clamped}");
+    Ok(())
+}
+
 /// Get the current engine status.
 #[tauri::command]
 pub async fn engine_get_status(
     state: State<'_, Arc<EngineState>>,
 ) -> Result<EngineStatusResponse, String> {
     let running = *state.running.read().await;
-    let current_task = state.current_task.lock().await.clone();
+    let tasks = state.running_tasks.lock().await;
+    let running_tasks: Vec<CurrentTask> = tasks.values().cloned().collect();
+    // Keep current_task for backward compatibility — first running task
+    let current_task = running_tasks.first().cloned();
+    let limit = *state.concurrency_limit.read().await;
 
     Ok(EngineStatusResponse {
         running,
         current_task,
+        running_tasks,
+        concurrency_limit: limit,
     })
 }
 
@@ -673,7 +768,7 @@ pub async fn engine_address_review(
         return Err(format!("Environment issue: {}", issue.error));
     }
 
-    // Budget check
+    // Budget check with reservation tracking
     {
         let app_data_dir = app.path().app_data_dir()
             .map_err(|e| format!("Failed to get app data dir: {e}"))?;
@@ -682,27 +777,48 @@ pub async fn engine_address_review(
         if effective_ceiling < config.max_usage_percent {
             config.max_usage_percent = effective_ceiling;
         }
-        let status = budget::calculate_budget_status(&config);
+        let reserved = *state.tokens_reserved.lock().await;
+        let status =
+            budget::calculate_budget_status_with_reservation(&config, reserved);
         if status.budget_exhausted {
             return Err("Budget exhausted — cannot address review".to_string());
         }
     }
 
     {
-        let current = state.current_task.lock().await;
-        if current.is_some() {
-            return Err("Another task is already in progress".to_string());
+        let tasks = state.running_tasks.lock().await;
+        let scans = *state.active_scans.lock().await;
+        let limit = *state.concurrency_limit.read().await;
+        let in_flight = tasks.len() + scans;
+        if in_flight >= limit {
+            return Err(format!(
+                "Concurrency limit reached ({}/{} tasks running)",
+                in_flight, limit
+            ));
+        }
+        if tasks.contains_key(&task_id) {
+            return Err("This task is already running".to_string());
         }
     }
 
     {
-        let mut current = state.current_task.lock().await;
-        *current = Some(CurrentTask {
-            task_id: task_id.clone(),
-            repository_id: repository_id.clone(),
-            phase: TaskPhase::Implementing,
-            started_at: chrono::Local::now().to_rfc3339(),
-        });
+        let mut tasks = state.running_tasks.lock().await;
+        tasks.insert(
+            task_id.clone(),
+            CurrentTask {
+                task_id: task_id.clone(),
+                repository_id: repository_id.clone(),
+                phase: TaskPhase::Implementing,
+                started_at: chrono::Local::now().to_rfc3339(),
+            },
+        );
+    }
+
+    // Reserve estimated tokens for this review cycle
+    let reserved_tokens = budget::estimated_task_tokens(Some("low"));
+    {
+        let mut reserved = state.tokens_reserved.lock().await;
+        *reserved += reserved_tokens;
     }
 
     let _ = app.emit("agent:task-started", serde_json::json!({
@@ -787,8 +903,11 @@ The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in eac
     )
     .map_err(|e| {
         let state_clone = state.inner().clone();
+        let tid = task_id.clone();
         tokio::spawn(async move {
-            *state_clone.current_task.lock().await = None;
+            state_clone.running_tasks.lock().await.remove(&tid);
+            let mut reserved = state_clone.tokens_reserved.lock().await;
+            *reserved = (*reserved - reserved_tokens).max(0);
         });
         e
     })?;
@@ -844,8 +963,12 @@ The comment_id MUST be the numeric ID from the [COMMENT_ID: <number>] tag in eac
     };
 
     {
-        let mut current = state.current_task.lock().await;
-        *current = None;
+        let mut tasks = state.running_tasks.lock().await;
+        tasks.remove(&task_id);
+    }
+    {
+        let mut reserved = state.tokens_reserved.lock().await;
+        *reserved = (*reserved - reserved_tokens).max(0);
     }
 
     if success {
@@ -916,5 +1039,10 @@ pub async fn engine_get_remote_url(
 #[serde(rename_all = "camelCase")]
 pub struct EngineStatusResponse {
     pub running: bool,
+    /// First running task, kept for backward compatibility.
     pub current_task: Option<CurrentTask>,
+    /// All currently running tasks.
+    pub running_tasks: Vec<CurrentTask>,
+    /// Maximum number of tasks that can run concurrently.
+    pub concurrency_limit: usize,
 }

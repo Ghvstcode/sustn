@@ -132,6 +132,37 @@ export function GeneralSection() {
                         />
                     </SettingsRow>
                 </div>
+
+                <div
+                    className="animate-fade-in-up"
+                    style={{ animationDelay: "200ms" }}
+                >
+                    <SettingsRow
+                        label="Parallel tasks"
+                        sublabel="Maximum number of tasks that can run at the same time. Higher values finish backlogs faster but consume tokens and Claude rate limit faster."
+                    >
+                        <Select
+                            value={String(settings.concurrencyLimit ?? 5)}
+                            onValueChange={(value) =>
+                                updateSetting({
+                                    key: "concurrencyLimit",
+                                    value: parseInt(value, 10),
+                                })
+                            }
+                        >
+                            <SelectTrigger className="w-24">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                                    <SelectItem key={n} value={String(n)}>
+                                        {n}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </SettingsRow>
+                </div>
                 {/*
                 <div
                     className="animate-fade-in-up"

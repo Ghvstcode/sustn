@@ -17,6 +17,7 @@ interface AgentConfigRow {
     last_scan_at: string | null;
     last_work_at: string | null;
     priority: number;
+    scan_enabled: number;
 }
 
 interface BudgetConfigRow {
@@ -43,6 +44,7 @@ function rowToAgentConfig(row: AgentConfigRow): AgentConfig {
         lastScanAt: row.last_scan_at ?? undefined,
         lastWorkAt: row.last_work_at ?? undefined,
         priority: row.priority,
+        scanEnabled: (row.scan_enabled ?? 1) === 1,
     };
 }
 
@@ -83,6 +85,7 @@ export async function updateAgentConfig(
             | "scheduleWindowEnd"
             | "scanIntervalMinutes"
             | "priority"
+            | "scanEnabled"
         >
     >,
 ): Promise<AgentConfig> {
@@ -121,6 +124,10 @@ export async function updateAgentConfig(
     if (fields.priority !== undefined) {
         setClauses.push(`priority = $${paramIndex++}`);
         values.push(fields.priority);
+    }
+    if (fields.scanEnabled !== undefined) {
+        setClauses.push(`scan_enabled = $${paramIndex++}`);
+        values.push(fields.scanEnabled ? 1 : 0);
     }
 
     if (setClauses.length > 0) {

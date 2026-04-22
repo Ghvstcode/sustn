@@ -560,50 +560,54 @@ export async function prLifecycleTick(): Promise<void> {
     const repoMap = new Map(repos.map((r) => [r.id, r]));
     const maxCycles = settings.maxReviewCycles ?? 5;
 
-    // Process all active PRs. Syncing comments is fast (GitHub API),
-    // but addressing (Claude CLI) is slow and mutex-guarded — so we
-    // process them sequentially but each PR gets synced every tick.
-    for (const pr of activePrs) {
-        const repo = repoMap.get(pr.repositoryId);
-        if (!repo) {
+    // Process all active PRs in parallel. Backend concurrency limits
+    // prevent too many Claude CLI instances from running at once —
+    // extra PRs will just get "Concurrency limit reached" and wait for
+    // the next tick.
+    await Promise.allSettled(
+        activePrs.map(async (pr) => {
+            const repo = repoMap.get(pr.repositoryId);
+            if (!repo) {
+                console.log(
+                    `[pr-lifecycle] skipping PR ${pr.prNumber} — repo not found`,
+                );
+                return;
+            }
+
+            const task = await getTask(pr.id);
+            if (!task) {
+                console.log(
+                    `[pr-lifecycle] skipping PR ${pr.prNumber} — task not found`,
+                );
+                return;
+            }
+
+            // Skip PRs currently being addressed (immediate trigger or prior tick)
+            if (task.prState === "addressing") {
+                console.log(
+                    `[pr-lifecycle] skipping PR #${pr.prNumber} — already being addressed`,
+                );
+                return;
+            }
+
+            const overrides = await getProjectOverrides(pr.repositoryId);
+            const autoReply =
+                overrides.overridePrAutoReply ?? settings.prLifecycleEnabled;
+
             console.log(
-                `[pr-lifecycle] skipping PR ${pr.prNumber} — repo not found`,
+                `[pr-lifecycle] processing PR #${pr.prNumber} (${task.title}) — prState=${task.prState}, repo=${repo.name}, autoReply=${autoReply}`,
             );
-            continue;
-        }
 
-        const task = await getTask(pr.id);
-        if (!task) {
-            console.log(
-                `[pr-lifecycle] skipping PR ${pr.prNumber} — task not found`,
-            );
-            continue;
-        }
-
-        // Skip PRs that are currently being addressed (from a previous tick
-        // or from the immediate trigger on import)
-        if (task.prState === "addressing") {
-            console.log(
-                `[pr-lifecycle] skipping PR #${pr.prNumber} — already being addressed`,
-            );
-            continue;
-        }
-
-        // Resolve per-repo auto-reply setting (override ?? global)
-        const overrides = await getProjectOverrides(pr.repositoryId);
-        const autoReply =
-            overrides.overridePrAutoReply ?? settings.prLifecycleEnabled;
-
-        console.log(
-            `[pr-lifecycle] processing PR #${pr.prNumber} (${task.title}) — prState=${task.prState}, repo=${repo.name}, autoReply=${autoReply}`,
-        );
-
-        try {
-            await processTaskPr(task, repo.path, maxCycles, autoReply);
-        } catch (e) {
-            console.error(`[pr-lifecycle] error processing ${pr.prUrl}:`, e);
-        }
-    }
+            try {
+                await processTaskPr(task, repo.path, maxCycles, autoReply);
+            } catch (e) {
+                console.error(
+                    `[pr-lifecycle] error processing ${pr.prUrl}:`,
+                    e,
+                );
+            }
+        }),
+    );
 
     console.log("[pr-lifecycle] tick — done");
 }

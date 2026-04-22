@@ -391,5 +391,25 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        // Migration 20: seed default concurrency limit
+        Migration {
+            version: 20,
+            description: "seed concurrency_limit global setting",
+            sql: r#"
+                INSERT OR IGNORE INTO global_settings (key, value) VALUES
+                    ('concurrency_limit', '5');
+            "#,
+            kind: MigrationKind::Up,
+        },
+        // Migration 21: per-repo scan_enabled flag (default true for existing repos,
+        // imported repos will set this to false)
+        Migration {
+            version: 21,
+            description: "add scan_enabled to agent_config",
+            sql: r#"
+                ALTER TABLE agent_config ADD COLUMN scan_enabled INTEGER NOT NULL DEFAULT 1;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -87,10 +87,14 @@ async function runSchedulerTick(
     // 2. Check if work is allowed right now
     const workAllowed = shouldWorkNow(settings);
 
-    // 3. Check if engine is busy
+    // 3. Check if engine is at concurrency capacity
     const status = await invoke<EngineStatus>("engine_get_status");
-    if (status.currentTask) {
-        console.log("[scheduler] engine busy — skipping tick");
+    const running = status.runningTasks?.length ?? 0;
+    const limit = status.concurrencyLimit ?? 1;
+    if (running >= limit) {
+        console.log(
+            `[scheduler] at concurrency limit (${running}/${limit}) — skipping tick`,
+        );
         return;
     }
 
@@ -111,7 +115,10 @@ async function runSchedulerTick(
         if (!agentConfig.enabled) continue;
 
         // ── Auto-scan ──────────────────────────────────────
-        if (isScanDue(agentConfig.lastScanAt, settings.scanFrequency)) {
+        if (
+            agentConfig.scanEnabled !== false &&
+            isScanDue(agentConfig.lastScanAt, settings.scanFrequency)
+        ) {
             console.log(`[scheduler] scan due for ${repo.name} — triggering`);
 
             try {

@@ -90,6 +90,7 @@ pub fn run() {
             engine_commands::engine_scan_now,
             engine_commands::engine_start_task,
             engine_commands::engine_get_status,
+            engine_commands::engine_set_concurrency_limit,
             engine_commands::engine_check_schedule,
             engine_commands::engine_push_branch,
             engine_commands::engine_list_branches,
