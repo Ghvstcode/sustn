@@ -16,6 +16,37 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
     {
+        version: "0.6.0",
+        date: "Apr 24th, 2026",
+        title: "Worktree Engine — Parallel Tasks, Live Agent View & PR Import",
+        description:
+            "Each task now runs in its own git worktree, unlocking real parallel execution. A new Agent tab streams Claude's output live, existing PRs can be imported as tasks, and the auto-reply loop now addresses every kind of PR comment.",
+        image: {
+            src: "/changelog/0.6.0-agent-tab.png",
+            alt: "Agent tab streaming live Claude CLI output during a task run",
+        },
+        features: [
+            "Worktree engine — every task executes in an isolated git worktree, so concurrent runs no longer step on each other's branch state",
+            "Parallel task execution — run up to 10 tasks at once (default 5), configurable in Settings → General. Scans count against the same pool so Claude CLI is never over-subscribed",
+            "Agent tab with live streaming — watch Claude's text, tool uses, and structured results stream into the task detail view in real time instead of waiting on an opaque status banner",
+            "PR import — pull an existing GitHub pull request into SUSTN as a task so the auto-reply + review loop can pick up a PR you opened by hand",
+            "Full PR comment coverage — the watcher now addresses inline review comments, issue-level PR comments, and review-summary bodies (previously only inline comments were handled)",
+            "Per-repo scan toggle — disable automatic AI scans on repos that only exist to host imported PRs, or pause scanning on a repo without removing it",
+        ],
+        improvements: [
+            "Agent events persisted to SQLite so the streaming log survives app restarts and tab switches",
+            "Structured result cards in the Agent tab render review/implement JSON (pass status, issues by severity, files modified) with syntax-highlighted diffs",
+            "PR lifecycle tick processes active PRs with `Promise.allSettled` so multiple PRs sync and address concurrently instead of one-at-a-time",
+            "Bot-authored replies are tagged with a hidden `<!-- sustn:task=... -->` marker so they're filtered out on the next fetch without relying on GitHub user identity",
+            "Daily budget reserves estimated tokens up front when a task starts, so concurrent starts can't over-commit the day's budget",
+        ],
+        fixes: [
+            "Resolved-thread filter is now scoped to inline comments, so issue comments sharing an ID with a resolved inline thread are no longer dropped",
+            "Imported PR repos no longer get retroactively scanned — `scan_enabled` defaults off for PR-import repos",
+            "Concurrency limit persists across restarts via `useStartupRecovery` syncing the stored value to the Rust engine at boot",
+        ],
+    },
+    {
         version: "0.5.0",
         date: "Apr 3rd, 2026",
         title: "PR Lifecycle & Auto-Reply",
