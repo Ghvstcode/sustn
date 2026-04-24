@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Switch } from "@ui/components/ui/switch";
 import { Slider } from "@ui/components/ui/slider";
 import { SettingsRow } from "../SettingsRow";
@@ -10,9 +11,20 @@ export function BudgetSection() {
     const { data: settings } = useGlobalSettings();
     const { mutate: updateSetting } = useUpdateGlobalSetting();
 
+    const [localCeiling, setLocalCeiling] = useState(
+        settings?.budgetCeilingPercent ?? 80,
+    );
+
+    // Sync local state when server data changes (e.g. undo)
+    useEffect(() => {
+        if (settings?.budgetCeilingPercent !== undefined) {
+            setLocalCeiling(settings.budgetCeilingPercent);
+        }
+    }, [settings?.budgetCeilingPercent]);
+
     if (!settings) return null;
 
-    const ceiling = settings.budgetCeilingPercent;
+    const ceiling = localCeiling;
     const reserved = 100 - ceiling;
 
     return (
@@ -44,6 +56,9 @@ export function BudgetSection() {
                             <Slider
                                 value={[ceiling]}
                                 onValueChange={([value]) =>
+                                    setLocalCeiling(value)
+                                }
+                                onValueCommit={([value]) =>
                                     updateSetting({
                                         key: "budgetCeilingPercent",
                                         value,
