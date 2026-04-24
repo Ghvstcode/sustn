@@ -1,6 +1,15 @@
 import type { Context, Next } from "hono";
 import type { Bindings } from "./config.js";
 
+async function hashToken(token: string): Promise<string> {
+    const data = new TextEncoder().encode(token);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = new Uint8Array(hashBuffer);
+    return Array.from(hashArray, (b) => b.toString(16).padStart(2, "0")).join(
+        "",
+    );
+}
+
 function getWindowStart(windowMs: number): number {
     const now = Date.now();
     return Math.floor(now / windowMs) * windowMs;
@@ -69,7 +78,8 @@ export function rateLimitByToken(maxRequests: number, windowMs: number) {
             ? authHeader.slice(7)
             : "anonymous";
 
-        const key = `token:${token}`;
+        const tokenHash = await hashToken(token);
+        const key = `token:${tokenHash}`;
         if (await isRateLimited(c.env.DB, key, maxRequests, windowMs)) {
             return c.json({ error: "Too many requests" }, 429);
         }
