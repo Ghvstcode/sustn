@@ -4,13 +4,17 @@ import type { Bindings } from "../lib/config.js";
 import { exchangeCodeForToken, fetchGitHubUser } from "../lib/github.js";
 import { createDb } from "../db/index.js";
 import { users } from "../db/schema.js";
+import { rateLimitByIp } from "../lib/rate-limit.js";
 
 const auth = new Hono<{ Bindings: Bindings }>();
 
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const SCOPES = "repo read:user user:email";
 
-auth.get("/auth/github", (c) => {
+// 10 requests per minute per IP for auth endpoints
+const authRateLimit = rateLimitByIp(10, 60_000);
+
+auth.get("/auth/github", authRateLimit, (c) => {
     const state = c.req.query("state") ?? "";
 
     const params = new URLSearchParams({
@@ -23,7 +27,7 @@ auth.get("/auth/github", (c) => {
     return c.redirect(`${GITHUB_AUTHORIZE_URL}?${params.toString()}`);
 });
 
-auth.get("/auth/callback", async (c) => {
+auth.get("/auth/callback", authRateLimit, async (c) => {
     const code = c.req.query("code");
     const state = c.req.query("state") ?? "";
 
