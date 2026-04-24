@@ -61,7 +61,15 @@ export function ProjectItem({
                     {initial}
                 </span>
                 {hasUnseenReview && (
-                    <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-sidebar" />
+                    <>
+                        <span
+                            className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-sidebar"
+                            aria-hidden="true"
+                        />
+                        <span className="sr-only">
+                            Has tasks awaiting review
+                        </span>
+                    </>
                 )}
             </span>
             <span className="flex-1 truncate text-[13px] font-medium">

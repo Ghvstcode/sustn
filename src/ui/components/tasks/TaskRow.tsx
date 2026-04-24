@@ -173,7 +173,7 @@ export function TaskRow({
     const stateIcon = (() => {
         if (isQueued) {
             return (
-                <span className="shrink-0">
+                <span className="shrink-0" aria-label="Queued">
                     <Clock className="h-4 w-4 text-violet-500" />
                 </span>
             );
@@ -185,6 +185,7 @@ export function TaskRow({
                     <button
                         type="button"
                         onClick={handleToggleDone}
+                        aria-label="Mark as done"
                         className="group/circle shrink-0"
                     >
                         <Circle className="h-4 w-4 text-muted-foreground/40 transition-colors group-hover/circle:text-green-500" />
@@ -195,6 +196,7 @@ export function TaskRow({
                     <button
                         type="button"
                         onClick={handleToggleDone}
+                        aria-label="Mark as done (currently in progress)"
                         className="group/circle shrink-0"
                     >
                         <Loader2 className="h-4 w-4 text-blue-500 animate-spin transition-colors group-hover/circle:text-green-500 group-hover/circle:animate-none" />
@@ -215,6 +217,7 @@ export function TaskRow({
                     <button
                         type="button"
                         onClick={handleToggleDone}
+                        aria-label="Mark as done (currently awaiting review)"
                         className="group/circle shrink-0"
                     >
                         <GitPullRequest className="h-4 w-4 text-amber-500 transition-colors group-hover/circle:text-green-500" />
@@ -225,6 +228,7 @@ export function TaskRow({
                     <button
                         type="button"
                         onClick={handleToggleDone}
+                        aria-label="Mark as pending (currently done)"
                         className="shrink-0"
                     >
                         <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -235,6 +239,7 @@ export function TaskRow({
                     <button
                         type="button"
                         onClick={handleToggleDone}
+                        aria-label="Mark as pending (currently dismissed)"
                         className="shrink-0"
                     >
                         <XCircle className="h-4 w-4 text-muted-foreground/50" />
@@ -257,6 +262,7 @@ export function TaskRow({
                 {showActions ? (
                     <button
                         type="button"
+                        aria-label="Drag to reorder"
                         className="mt-0.5 cursor-grab touch-none text-muted-foreground/30 hover:text-muted-foreground"
                         {...attributes}
                         {...listeners}
@@ -366,6 +372,7 @@ export function TaskRow({
                     <div className="mt-0.5 flex items-center gap-0.5">
                         <button
                             type="button"
+                            aria-label="Edit task"
                             className="rounded-md p-1 text-muted-foreground/50 hover:text-foreground hover:bg-accent transition-colors"
                             onClick={handleStartEdit}
                         >
@@ -373,6 +380,7 @@ export function TaskRow({
                         </button>
                         <button
                             type="button"
+                            aria-label="Add comment"
                             className="rounded-md p-1 text-muted-foreground/50 hover:text-foreground hover:bg-accent transition-colors"
                             onClick={handleToggleComment}
                         >

@@ -194,31 +194,44 @@ export function SchedulingSection() {
                                 sublabel={`The agent will work between ${settings.scheduleStart} and ${settings.scheduleEnd}. Times are in ${settings.scheduleTimezone || detectedTimezone}.`}
                             >
                                 <div className="flex items-center gap-2">
-                                    <input
-                                        type="time"
-                                        value={settings.scheduleStart}
-                                        onChange={(e) =>
-                                            updateSetting({
-                                                key: "scheduleStart",
-                                                value: e.target.value,
-                                            })
-                                        }
-                                        className="rounded-md border border-input bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
-                                    />
-                                    <span className="text-xs text-muted-foreground">
+                                    <label className="flex items-center gap-1.5">
+                                        <span className="sr-only">
+                                            Start time
+                                        </span>
+                                        <input
+                                            type="time"
+                                            value={settings.scheduleStart}
+                                            onChange={(e) =>
+                                                updateSetting({
+                                                    key: "scheduleStart",
+                                                    value: e.target.value,
+                                                })
+                                            }
+                                            className="rounded-md border border-input bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
+                                        />
+                                    </label>
+                                    <span
+                                        className="text-xs text-muted-foreground"
+                                        aria-hidden="true"
+                                    >
                                         to
                                     </span>
-                                    <input
-                                        type="time"
-                                        value={settings.scheduleEnd}
-                                        onChange={(e) =>
-                                            updateSetting({
-                                                key: "scheduleEnd",
-                                                value: e.target.value,
-                                            })
-                                        }
-                                        className="rounded-md border border-input bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
-                                    />
+                                    <label className="flex items-center gap-1.5">
+                                        <span className="sr-only">
+                                            End time
+                                        </span>
+                                        <input
+                                            type="time"
+                                            value={settings.scheduleEnd}
+                                            onChange={(e) =>
+                                                updateSetting({
+                                                    key: "scheduleEnd",
+                                                    value: e.target.value,
+                                                })
+                                            }
+                                            className="rounded-md border border-input bg-transparent px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
+                                        />
+                                    </label>
                                 </div>
                             </SettingsRow>
                         </div>

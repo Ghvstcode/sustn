@@ -53,6 +53,7 @@ export function BudgetSection() {
                                 max={100}
                                 step={5}
                                 className="w-full"
+                                aria-label={`Budget ceiling: ${ceiling}% of weekly budget`}
                             />
                             <div className="flex items-center justify-between">
                                 <p className="text-sm font-medium text-foreground">
