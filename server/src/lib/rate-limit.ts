@@ -1,52 +1,46 @@
 import type { Context, Next } from "hono";
 import type { Bindings } from "./config.js";
 
-interface SlidingWindowEntry {
-    timestamps: number[];
+function getWindowStart(windowMs: number): number {
+    const now = Date.now();
+    return Math.floor(now / windowMs) * windowMs;
 }
 
-const store = new Map<string, SlidingWindowEntry>();
+async function isRateLimited(
+    db: D1Database,
+    key: string,
+    maxRequests: number,
+    windowMs: number,
+): Promise<boolean> {
+    const windowStart = getWindowStart(windowMs);
 
-const CLEANUP_INTERVAL = 60_000;
-let lastCleanup = Date.now();
+    // Atomically insert or increment the counter for this key+window,
+    // and return the new count. D1 is shared across isolates so this
+    // is consistent regardless of which Worker instance handles the request.
+    const result = await db
+        .prepare(
+            `INSERT INTO rate_limits (key, window_start, count)
+             VALUES (?, ?, 1)
+             ON CONFLICT (key, window_start)
+             DO UPDATE SET count = count + 1
+             RETURNING count`,
+        )
+        .bind(key, windowStart)
+        .first<{ count: number }>();
 
-function cleanup(windowMs: number) {
-    const now = Date.now();
-    if (now - lastCleanup < CLEANUP_INTERVAL) return;
-    lastCleanup = now;
+    // Clean up old windows (non-blocking, best-effort)
+    const cutoff = windowStart - windowMs;
+    void db
+        .prepare(`DELETE FROM rate_limits WHERE window_start < ?`)
+        .bind(cutoff)
+        .run();
 
-    const cutoff = now - windowMs;
-    for (const [key, entry] of store) {
-        entry.timestamps = entry.timestamps.filter((t) => t > cutoff);
-        if (entry.timestamps.length === 0) {
-            store.delete(key);
-        }
-    }
-}
-
-function isRateLimited(key: string, maxRequests: number, windowMs: number): boolean {
-    const now = Date.now();
-    cleanup(windowMs);
-
-    const cutoff = now - windowMs;
-    let entry = store.get(key);
-    if (!entry) {
-        entry = { timestamps: [] };
-        store.set(key, entry);
-    }
-
-    entry.timestamps = entry.timestamps.filter((t) => t > cutoff);
-
-    if (entry.timestamps.length >= maxRequests) {
-        return true;
-    }
-
-    entry.timestamps.push(now);
-    return false;
+    return (result?.count ?? 0) > maxRequests;
 }
 
 /**
  * Rate limit by client IP address.
+ * Uses D1 for state so limits are enforced across Worker isolates.
  */
 export function rateLimitByIp(maxRequests: number, windowMs: number) {
     return async (c: Context<{ Bindings: Bindings }>, next: Next) => {
@@ -56,7 +50,7 @@ export function rateLimitByIp(maxRequests: number, windowMs: number) {
             "unknown";
 
         const key = `ip:${ip}`;
-        if (isRateLimited(key, maxRequests, windowMs)) {
+        if (await isRateLimited(c.env.DB, key, maxRequests, windowMs)) {
             return c.json({ error: "Too many requests" }, 429);
         }
 
@@ -66,14 +60,17 @@ export function rateLimitByIp(maxRequests: number, windowMs: number) {
 
 /**
  * Rate limit by Bearer token (user-level).
+ * Uses D1 for state so limits are enforced across Worker isolates.
  */
 export function rateLimitByToken(maxRequests: number, windowMs: number) {
     return async (c: Context<{ Bindings: Bindings }>, next: Next) => {
         const authHeader = c.req.header("Authorization");
-        const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "anonymous";
+        const token = authHeader?.startsWith("Bearer ")
+            ? authHeader.slice(7)
+            : "anonymous";
 
         const key = `token:${token}`;
-        if (isRateLimited(key, maxRequests, windowMs)) {
+        if (await isRateLimited(c.env.DB, key, maxRequests, windowMs)) {
             return c.json({ error: "Too many requests" }, 429);
         }
 
